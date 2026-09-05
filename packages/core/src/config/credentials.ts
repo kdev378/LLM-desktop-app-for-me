@@ -36,7 +36,12 @@ export async function loadCredentials(root?: string): Promise<CredentialsFile> {
   for (const v of Object.values(parsed.data.keys)) registerSecret(v);
 
   let permissionWarning: string | null = null;
-  if (process.platform !== 'win32') {
+  if (process.platform === 'win32') {
+    // Windows では chmod がほぼ無効で、ACL を絞る実装をまだ持っていない。
+    // 「600 で保護されている」と誤解させないよう、毎回そう言う。
+    permissionWarning =
+      'Windows では credentials.json のアクセス権を絞れていません。同じPCの他の利用者から読める可能性があります。';
+  } else {
     try {
       const st = await fs.stat(file);
       const mode = st.mode & 0o777;

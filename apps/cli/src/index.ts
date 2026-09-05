@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { Command, CommanderError } from 'commander';
-import { isAkariError, messageOf } from '@akari/core';
+import { isAkariError, messageOf, redact } from '@akari/core';
 import { VERSION, COMMIT } from './version.js';
 import { ExitError, EXIT } from './exit.js';
 import { setColor, errorLine, hintLine, out, c } from './term.js';
@@ -171,7 +171,8 @@ async function run(fn: () => Promise<void>): Promise<void> {
       return;
     }
     errorLine(messageOf(err));
-    if (process.env.AKARI_DEBUG) process.stderr.write(String((err as Error)?.stack ?? '') + '\n');
+    // スタックにも鍵が混ざりうるので、伏字化を通してから出す。
+    if (process.env.AKARI_DEBUG) process.stderr.write(redact(String((err as Error)?.stack ?? '')) + '\n');
     else hintLine('詳しい内容は AKARI_DEBUG=1 を付けて再実行すると出ます。');
     process.exitCode = EXIT.runtime;
   }
