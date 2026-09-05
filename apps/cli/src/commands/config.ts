@@ -183,10 +183,9 @@ export async function endpointsProbe(
   if (!target) throw new ExitError(EXIT.usage, '判定する接続先がありません。');
 
   const resolved = await resolveEndpoint(ctx.config, target.id, ctx.root);
-  out(c.dim(`${target.name} を判定しています…`));
-  const result = await createProvider(resolved, { logger: ctx.logger }).probe(
-    target.defaultModel ?? undefined,
-  );
+  const model = opts.model ?? process.env.AKARI_MODEL ?? target.defaultModel ?? undefined;
+  out(c.dim(`${target.name}${model ? ` / ${model}` : ''} を判定しています…`));
+  const result = await createProvider(resolved, { logger: ctx.logger }).probe(model);
 
   if (ctx.json) {
     out(JSON.stringify(result, null, 2));
@@ -199,16 +198,30 @@ export async function endpointsProbe(
 
   if (!result.reachable) throw new ExitError(EXIT.unreachable, '接続先に到達できませんでした。');
 
+  const probedAt = new Date().toISOString();
   await persist(
     ctx,
     updateEndpoint(ctx.config, target.id, {
       capabilities: {
+        ...target.capabilities,
         tools: result.tools,
-        vision: target.capabilities.vision,
         usageReported: result.usageReported,
         streamsToolCalls: result.streamsToolCalls,
-        probedAt: new Date().toISOString(),
+        probedAt,
         probedModel: result.testedModel,
+        byModel: {
+          ...target.capabilities.byModel,
+          ...(result.testedModel
+            ? {
+                [result.testedModel]: {
+                  tools: result.tools,
+                  usageReported: result.usageReported,
+                  streamsToolCalls: result.streamsToolCalls,
+                  probedAt,
+                },
+              }
+            : {}),
+        },
       },
     }),
   );

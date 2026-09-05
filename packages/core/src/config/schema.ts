@@ -21,6 +21,14 @@ const urlWithScheme = z
   }, 'http:// または https:// で始まるURLを入れてください')
   .transform((v) => v.replace(/\/+$/, '')); // 末尾スラッシュは除去して保存
 
+/** 1つのモデルに対する判定結果。ツール対応はモデルごとに変わる。 */
+export const modelCapabilitySchema = z.object({
+  tools: z.enum(['native', 'prompted', 'none']),
+  usageReported: z.boolean().default(false),
+  streamsToolCalls: z.boolean().default(false),
+  probedAt: z.string(),
+});
+
 export const capabilitiesSchema = z.object({
   tools: z.enum(['auto', 'native', 'prompted', 'none']).default('auto'),
   vision: z.enum(['auto', 'yes', 'no']).default('auto'),
@@ -28,6 +36,11 @@ export const capabilitiesSchema = z.object({
   streamsToolCalls: z.boolean().default(false),
   probedAt: z.string().nullable().default(null),
   probedModel: z.string().nullable().default(null),
+  /**
+   * モデルごとの判定結果。モデルを行き来しても判定し直さないため。
+   * 上の tools/probedModel は「最後に判定したモデル」の写しで、表示用に残している。
+   */
+  byModel: z.record(modelCapabilitySchema).default({}),
 });
 
 export const endpointSchema = z.object({
@@ -98,6 +111,7 @@ export const configSchema = z.object({
 export type Config = z.infer<typeof configSchema>;
 export type Endpoint = z.infer<typeof endpointSchema>;
 export type EndpointCapabilities = z.infer<typeof capabilitiesSchema>;
+export type ModelCapability = z.infer<typeof modelCapabilitySchema>;
 export type GenerationSettings = z.infer<typeof generationSchema>;
 export type AgentSettings = z.infer<typeof agentSchema>;
 export type PermissionMode = AgentSettings['permissionMode'];

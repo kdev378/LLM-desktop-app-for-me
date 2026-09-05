@@ -10,7 +10,7 @@
 import http from 'node:http';
 
 const port = Number(process.argv[2] ?? 11499);
-const MODELS = ['mock-chat-7b', 'mock-coder-14b'];
+const MODELS = ['mock-chat-7b', 'mock-coder-14b', 'mock-notools-4b'];
 
 // エージェントの動作確認用の台本。
 // 「その会話で何ターン目か」で引く。呼び出し回数で数えると、
@@ -58,7 +58,10 @@ const server = http.createServer((req, res) => {
     const last = [...(payload.messages ?? [])].reverse().find((m) => m.role === 'user');
     // AKARI_MOCK_NO_TOOLS=1 で「ツールを理解しないモデル」を再現する。
     // Gemma 系のようにツール用テンプレートを持たないモデルの挙動にあたる。
-    const ignoreTools = process.env.AKARI_MOCK_NO_TOOLS === '1';
+    // 名前に notool を含むモデルは「ツールを理解しないモデル」として振る舞う。
+    // 1台のサーバで、対応モデルと非対応モデルを並べて比べられるようにするため。
+    const ignoreTools =
+      process.env.AKARI_MOCK_NO_TOOLS === '1' || /notool/i.test(String(payload.model ?? ''));
     const wantsTool = !ignoreTools && Array.isArray(payload.tools) && payload.tools.length > 0;
 
     res.writeHead(200, {
@@ -108,10 +111,20 @@ const server = http.createServer((req, res) => {
 
     // 台本に text があればそれを返す。無ければ入力をなぞった固定文。
     const scriptedStep = readScript()[turnIndex(payload)] ?? null;
-    const reply =
-      typeof scriptedStep?.text === 'string'
-        ? scriptedStep.text
-        : `（模擬サーバの応答）受け取った文: ${(last?.content ?? '').slice(0, 60)}\nこれはテスト用の固定応答です。本物のモデルは動いていません。`;
+    let reply;
+    if (typeof scriptedStep?.text === 'string') {
+      reply = scriptedStep.text;
+    } else if (scriptedStep?.name) {
+      // 同じ台本を、ツール非対応モデルでは代替方式のブロックとして出す。
+      // 1つの台本で両方の経路を比べられるようにするため。
+      const block = JSON.stringify({
+        name: scriptedStep.name,
+        arguments: scriptedStep.arguments ?? {},
+      });
+      reply = ['道具を使います。', '```akari-tool', block, '```'].join('\n');
+    } else {
+      reply = `（模擬サーバの応答）受け取った文: ${(last?.content ?? '').slice(0, 60)}\nこれはテスト用の固定応答です。本物のモデルは動いていません。`;
+    }
     let i = 0;
     const tokens = [...reply];
     const timer = setInterval(() => {

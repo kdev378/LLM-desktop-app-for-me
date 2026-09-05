@@ -64,6 +64,7 @@
 |---|---|---|---|---|
 | `endpoints[].baseUrl` | URL文字列、`http`/`https` のみ | — | 接続先 | 全リクエストの前置き。末尾スラッシュは除去して保存 |
 | `endpoints[].timeoutMs` | 1000〜600000 | 120000 | 接続先 | 最初のトークンまでの待ち上限 |
+| `endpoints[].capabilities.byModel` | モデル名→判定結果 | `{}` | 接続先 | モデルごとのツール対応。行き来しても判定し直さないため |
 | `generation.temperature` | 0.0〜2.0 | 0.7 | 全体（会話で上書き可） | 大きいほど散らばる |
 | `generation.topP` | 0.0〜1.0 | 1.0 | 同上 | — |
 | `generation.maxTokens` | 1以上 または null | null | 同上 | null はサーバ既定に任せる |

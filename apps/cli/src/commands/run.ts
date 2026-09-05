@@ -66,7 +66,11 @@ export async function runCommand(promptArgs: string[], opts: RunOptions): Promis
   // モデルが何も呼ばず「何も起きずに終わった」ように見えてしまう。
   const toolsMode = await resolveToolsMode(
     provider,
-    { tools: endpoint.capabilities.tools, probedModel: endpoint.capabilities.probedModel },
+    {
+      tools: endpoint.capabilities.tools,
+      probedModel: endpoint.capabilities.probedModel,
+      byModel: endpoint.capabilities.byModel,
+    },
     model,
   );
   if (!ctx.json && !ctx.quiet) {
@@ -77,7 +81,16 @@ export async function runCommand(promptArgs: string[], opts: RunOptions): Promis
     await persist(
       ctx,
       updateEndpoint(ctx.config, endpoint.id, {
-        capabilities: { ...endpoint.capabilities, ...toolsMode.capabilities },
+        capabilities: {
+          ...endpoint.capabilities,
+          ...toolsMode.capabilities,
+          byModel: {
+            ...endpoint.capabilities.byModel,
+            ...(toolsMode.modelCapability
+              ? { [toolsMode.modelCapability.model]: toolsMode.modelCapability.value }
+              : {}),
+          },
+        },
       }),
     ).catch(() => undefined);
   }

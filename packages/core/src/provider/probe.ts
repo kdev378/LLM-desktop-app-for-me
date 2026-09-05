@@ -149,7 +149,7 @@ export type ToolsModeResolution = {
   /** 今回あらためて判定したか。false なら保存済みの値をそのまま使った。 */
   probed: boolean;
   notes: string[];
-  /** 判定した場合、保存すべき新しい capabilities。 */
+  /** 判定した場合、保存すべき新しい capabilities（最後に判定したモデルの写し）。 */
   capabilities?: {
     tools: 'native' | 'prompted' | 'none';
     usageReported: boolean;
@@ -157,25 +157,46 @@ export type ToolsModeResolution = {
     probedAt: string;
     probedModel: string;
   };
+  /** 判定した場合、byModel へ足すべき1件。 */
+  modelCapability?: {
+    model: string;
+    value: {
+      tools: 'native' | 'prompted' | 'none';
+      usageReported: boolean;
+      streamsToolCalls: boolean;
+      probedAt: string;
+    };
+  };
 };
 
 export async function resolveToolsMode(
   provider: Provider,
-  current: { tools: 'auto' | 'native' | 'prompted' | 'none'; probedModel: string | null },
+  current: {
+    tools: 'auto' | 'native' | 'prompted' | 'none';
+    probedModel: string | null;
+    byModel?: Record<string, { tools: 'native' | 'prompted' | 'none' }>;
+  },
   model: string,
   signal?: AbortSignal,
 ): Promise<ToolsModeResolution> {
-  const needsProbe = current.tools === 'auto' || current.probedModel !== model;
-  if (!needsProbe) {
-    return { mode: current.tools as 'native' | 'prompted' | 'none', probed: false, notes: [] };
+  // このモデルを前に判定していれば、それを使う。行き来しても判定し直さない。
+  const remembered = current.byModel?.[model];
+  if (remembered) {
+    return { mode: remembered.tools, probed: false, notes: [] };
+  }
+  // 記録が無くても、最後の判定が同じモデルに対するものならそれで足りる（古い設定との互換）
+  if (current.tools !== 'auto' && current.probedModel === model) {
+    return { mode: current.tools, probed: false, notes: [] };
   }
 
   const why =
-    current.tools === 'auto'
+    current.tools === 'auto' && current.probedModel === null
       ? 'ツール呼び出しへの対応が未判定のため'
-      : `前回の判定は ${current.probedModel} に対するものだったため`;
+      : `${model} はまだ判定していないため`;
 
-  const result = await probeEndpoint(provider, provider.endpointId, model, signal);
+  // Provider の口を通す。中身は probeEndpoint と同じだが、
+  // インターフェース越しにしておくと差し替えと検証がしやすい。
+  const result = await provider.probe(model, signal);
   if (!result.reachable) {
     // 判定できなかった。動くふりをせず、そのまま伝える。
     return {
@@ -185,6 +206,7 @@ export async function resolveToolsMode(
     };
   }
 
+  const probedAt = new Date().toISOString();
   return {
     mode: result.tools,
     probed: true,
@@ -193,8 +215,17 @@ export async function resolveToolsMode(
       tools: result.tools,
       usageReported: result.usageReported,
       streamsToolCalls: result.streamsToolCalls,
-      probedAt: new Date().toISOString(),
+      probedAt,
       probedModel: model,
+    },
+    modelCapability: {
+      model,
+      value: {
+        tools: result.tools,
+        usageReported: result.usageReported,
+        streamsToolCalls: result.streamsToolCalls,
+        probedAt,
+      },
     },
   };
 }

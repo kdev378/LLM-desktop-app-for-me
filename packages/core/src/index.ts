@@ -13,6 +13,7 @@ export {
   type Config,
   type Endpoint,
   type EndpointCapabilities,
+  type ModelCapability,
   type GenerationSettings,
   type AgentSettings,
   type PermissionMode,

@@ -308,3 +308,124 @@ test('代替方式でも承認は効く', async () => {
   assert.ok(events.some((e) => e.type === 'approval-request'));
   assert.equal(await fs.readFile(path.join(root, 'a.txt'), 'utf8'), '元\n');
 });
+
+// ---------------- モデルごとの判定の記憶 ----------------
+
+test('一度判定したモデルは、次からは判定し直さない', async () => {
+  let probeCount = 0;
+  const provider = {
+    endpointId: 'ep',
+    async listModels() {
+      return [{ id: 'a' }];
+    },
+    async probe() {
+      probeCount += 1;
+      return {
+        reachable: true,
+        models: [{ id: 'a' }],
+        tools: 'prompted' as const,
+        usageReported: false,
+        streamsToolCalls: false,
+        testedModel: 'a',
+        notes: [],
+      };
+    },
+    async *chat() {
+      /* 使わない */
+    },
+  } as never;
+
+  const { resolveToolsMode } = await import('../dist/index.js');
+
+  const first = await resolveToolsMode(provider, { tools: 'auto', probedModel: null }, 'a');
+  assert.equal(first.probed, true);
+  assert.equal(first.mode, 'prompted');
+  assert.equal(first.modelCapability?.model, 'a');
+
+  const byModel = { a: first.modelCapability!.value };
+  const second = await resolveToolsMode(
+    provider,
+    { tools: 'prompted', probedModel: 'a', byModel },
+    'a',
+  );
+  assert.equal(second.probed, false, '同じモデルなら判定し直さない');
+  assert.equal(second.mode, 'prompted');
+  assert.equal(probeCount, 1);
+});
+
+test('別のモデルへ切り替えたら判定し直す。前のモデルの記録は残る', async () => {
+  const modes: Record<string, 'native' | 'prompted'> = { small: 'prompted', big: 'native' };
+  const provider = {
+    endpointId: 'ep',
+    async listModels() {
+      return [{ id: 'small' }, { id: 'big' }];
+    },
+    async probe(model?: string) {
+      return {
+        reachable: true,
+        models: [],
+        tools: modes[model ?? 'small']!,
+        usageReported: false,
+        streamsToolCalls: false,
+        testedModel: model ?? 'small',
+        notes: [],
+      };
+    },
+    async *chat() {
+      /* 使わない */
+    },
+  } as never;
+
+  const { resolveToolsMode } = await import('../dist/index.js');
+
+  const a = await resolveToolsMode(provider, { tools: 'auto', probedModel: null }, 'small');
+  assert.equal(a.mode, 'prompted');
+  const byModel: Record<string, { tools: 'native' | 'prompted' | 'none' }> = {
+    small: a.modelCapability!.value,
+  };
+
+  const b = await resolveToolsMode(
+    provider,
+    { tools: 'prompted', probedModel: 'small', byModel },
+    'big',
+  );
+  assert.equal(b.probed, true, '別モデルなら判定し直す');
+  assert.equal(b.mode, 'native');
+  byModel.big = b.modelCapability!.value;
+
+  // 元のモデルへ戻しても、判定し直さない
+  const c = await resolveToolsMode(
+    provider,
+    { tools: 'native', probedModel: 'big', byModel },
+    'small',
+  );
+  assert.equal(c.probed, false);
+  assert.equal(c.mode, 'prompted');
+});
+
+test('判定できない接続先では none を返し、実行させない', async () => {
+  const provider = {
+    endpointId: 'ep',
+    async listModels(): Promise<never> {
+      throw new Error('繋がりません');
+    },
+    async probe() {
+      return {
+        reachable: false,
+        models: [],
+        tools: 'none' as const,
+        usageReported: false,
+        streamsToolCalls: false,
+        testedModel: null,
+        notes: [],
+      };
+    },
+    async *chat() {
+      /* 使わない */
+    },
+  } as never;
+  const { resolveToolsMode } = await import('../dist/index.js');
+  const r = await resolveToolsMode(provider, { tools: 'auto', probedModel: null }, 'x');
+  assert.equal(r.mode, 'none');
+  assert.equal(r.capabilities, undefined, '判定できなかった結果を保存しない');
+});
