@@ -1,0 +1,18 @@
+{
+  "name": "@akari/cli",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "akari": "./dist/index.js"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsc -p tsconfig.json && node --test --experimental-strip-types \"test/*.test.ts\""
+  },
+  "dependencies": {
+    "@akari/core": "workspace:*",
+    "commander": "^12.1.0"
+  }
+}

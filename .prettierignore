@@ -1,0 +1,11 @@
+dist/
+node_modules/
+pnpm-lock.yaml
+
+# 文書は手で書いた通りに残す。整形で差分ノイズを作らない。
+*.md
+docs/
+AGENTS.md
+CLAUDE.md
+context/
+.claude/

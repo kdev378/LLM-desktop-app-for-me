@@ -18,13 +18,14 @@
 
 - 対象環境: Windows 10/11、macOS（arm64/x64）、Linux デスクトップ
 - 前提: Node.js 20 以上、pnpm 9 以上、ローカルLLMサーバ1つ（Ollama / llama.cpp server / LM Studio / vLLM のいずれか）
-- 起動（開発）: `pnpm install` → `pnpm dev`（デスクトップ）
-- CLI（開発）: `pnpm --filter @akari/cli build` → `node apps/cli/dist/index.js`
-- ビルド: `pnpm build` / 配布物 `pnpm dist`
-- テスト: `pnpm test`
-- 動作確認の手順: `docs/spec/11-roadmap.md` の各段階「確かめ方」
+- 準備: `pnpm install` → `pnpm build`
+- CLI: `node apps/cli/dist/index.js`（`akari` にあたる）
+- テスト: `pnpm test`（core 43件 + CLI 14件）
+- 型検査: `pnpm typecheck` / 整形: `pnpm format`（対象はコードのみ。文書は整形しない）
+- 模擬LLMサーバ: `node tools/mock-llm-server.mjs 11499`（本物が手元に無いとき）
+- 動作確認の手順: `docs/getting-started.md`
 
-> 現状は仕様のみ。上のコマンドはまだ存在しない。P0 で作る。
+> デスクトップ（`pnpm dev`）と配布（`pnpm dist`）はまだ無い。P1 以降。
 
 ## 4. 構成
 
@@ -64,9 +65,25 @@
 | 2026-09-05 | コマンド実行は書き込みより危険度が高い | `run_command` からファイルを書けるため、書き込みの承認を迂回できてしまう | — |
 | 2026-09-05 | 鍵は平文保存（OS権限に依存） | Electron の `safeStorage` は CLI から復号できず、中核共有の前提が崩れる | OS キーチェーンを使う小さなネイティブ層を足す。CLI との共有方法を先に決める必要がある |
 | 2026-09-05 | v1 では署名・公証しない | 個人用ツール。証明書の費用と手間が見合わない | 必要になったら Windows/macOS の証明書を用意 |
+| 2026-09-05 | `stream:true` を無視するサーバの一括JSON応答も受け付ける | 互換性の実情。エラーにするより本文を出すほうが役に立つ。ログには互換の欠落として残す | 該当分岐を消して `incompatible` に戻す |
+| 2026-09-05 | 依存は zod と commander の2つだけ | 検証とCLI引数は自作より既存が堅い。色・ID・テストは自前と標準機能で足りる | どちらも境界が薄く差し替え可能 |
+| 2026-09-05 | テストは `node --test` + 型ストリップ、ビルド済み dist に対して実行 | 追加の依存が要らず、配布物そのものを検証できる | vitest 等へ移行 |
+| 2026-09-05 | Prettier の対象からすべての `.md` を外す | 手で書いた文書が整形され、意図しない差分が全ファイルに出た | `.prettierignore` から該当行を消す |
 
 ## 9. 今の状態
 
-- 動いているもの: なし（仕様のみ）
-- 未完成: 全部。`docs/spec/11-roadmap.md` の P0 から
-- 次にやること: P0（pnpm workspace の骨格 + `core` の config/provider + CLI の `models`/`chat`/`doctor`）。ローカルLLMサーバ4種との疎通と、ツール呼び出しストリーム形式の確認が最初の関門
+**P0 完了（実機確認を除く）**
+
+- 動いているもの:
+  - `@akari/core`: 設定の読み書きと検証、鍵の解決（`env:` 参照込み）、OpenAI互換クライアント
+    （SSE解釈、ツール呼び出し断片の連結、エラー分類、段階別タイムアウト、機能判定）、
+    伏字化、NDJSONログ、診断の書き出し
+  - `@akari/cli`: `config endpoints add/list/rm/use/probe`、`config list/get/set`、
+    `models`、`chat`、`doctor`
+  - `tools/mock-llm-server.mjs`: 開発用の模擬OpenAI互換サーバ
+- 検証済み: 自動テスト57件（core 43 / CLI 14）。模擬サーバに対する通し動作。
+- **未検証（重要）**: Ollama / llama.cpp / LM Studio / vLLM の**実機**では一度も動かしていない。
+  ツール呼び出しのストリーム形式の仮定（`docs/spec/02-provider.md`）は未解決のまま。
+  対話モードの `Ctrl+C` は自動テストしていない。
+- 未実装: デスクトップアプリ全体、会話の保存、エージェント実行（`run`/`diff`/`undo`/`runs`）
+- 次にやること: 実機4種での疎通確認 → P1（Electron の骨格 + Chat 画面 + 会話の保存）

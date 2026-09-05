@@ -1,0 +1,216 @@
+#!/usr/bin/env node
+import { Command, CommanderError } from 'commander';
+import { isAkariError, messageOf } from '@akari/core';
+import { VERSION, COMMIT } from './version.js';
+import { ExitError, EXIT } from './exit.js';
+import { setColor, errorLine, hintLine, out, c } from './term.js';
+import { modelsCommand } from './commands/models.js';
+import { chatCommand } from './commands/chat.js';
+import { doctorCommand } from './commands/doctor.js';
+import {
+  configList,
+  configGet,
+  configSet,
+  endpointsList,
+  endpointsAdd,
+  endpointsRemove,
+  endpointsUse,
+  endpointsProbe,
+} from './commands/config.js';
+
+/**
+ * akari CLI。仕様: docs/spec/10-cli.md
+ * デスクトップと同じ @akari/core を使い、同じ設定・同じ接続先を共有する。
+ */
+
+const program = new Command();
+
+program
+  .name('akari')
+  .description('ローカルLLM用のCLI。デスクトップ版と設定を共有します。')
+  .version(`${VERSION} (${COMMIT})`, '-v, --version', 'バージョンを表示')
+  .option('-e, --endpoint <名前|ID>', '使う接続先')
+  .option('-m, --model <名前>', '使うモデル')
+  .option('--json', '1行1JSONで出力する（人向けの装飾を出さない）')
+  .option('-q, --quiet', '最終的な出力だけを出す')
+  .option('--no-color', '色を使わない')
+  .option('--verbose', 'ログ水準を debug にする')
+  .helpOption('-h, --help', 'ヘルプを表示')
+  .addHelpText(
+    'after',
+    `
+例:
+  akari config endpoints add --name "ローカル" --url http://localhost:11434/v1
+  akari doctor                        接続と設定の状態を見る
+  akari models                        モデル一覧
+  akari chat                          対話する
+  akari chat -p "TypeScriptとは"       一回だけ聞く
+  echo "要約して" | akari chat         標準入力から
+
+まだ実装されていないもの: run / diff / undo / runs（エージェント実行。docs/spec/11-roadmap.md の P3）
+`,
+  );
+
+program
+  .command('models')
+  .description('接続先のモデル一覧を出す')
+  .action(async () => run(() => modelsCommand(globals())));
+
+program
+  .command('chat')
+  .description('ツールなしの対話。ファイルは触りません')
+  .option('-p, --prompt <文>', 'この文を1回だけ送って終わる')
+  .option('-s, --system <文>', 'システムプロンプト')
+  .option('-t, --temperature <数値>', '0.0〜2.0')
+  .option('--max-tokens <整数>', '生成の上限トークン数')
+  .action(async (o) => run(() => chatCommand({ ...globals(), ...o })));
+
+program
+  .command('doctor')
+  .description('接続先・設定・保存データの状態を出す')
+  .option('--export <パス>', '診断を書き出す（鍵と会話本文は含みません）')
+  .option('--no-probe', '接続先へ問い合わせず、設定だけを出す')
+  .action(async (o) =>
+    run(() => doctorCommand({ ...globals(), export: o.export, noProbe: o.probe === false })),
+  );
+
+const config = program.command('config').description('設定の確認と変更');
+
+config
+  .command('list')
+  .description('現在の設定を出す（鍵の値は出ません）')
+  .action(async () => run(() => configList(globals())));
+config
+  .command('get <項目>')
+  .description('例: akari config get agent.maxSteps')
+  .action(async (p) => run(() => configGet(p, globals())));
+config
+  .command('set <項目> <値>')
+  .description('例: akari config set agent.maxSteps 40')
+  .action(async (p, v) => run(() => configSet(p, v, globals())));
+
+const endpoints = config.command('endpoints').description('接続先の操作');
+endpoints
+  .command('list')
+  .description('接続先の一覧')
+  .action(async () => run(() => endpointsList(globals())));
+endpoints
+  .command('add')
+  .description('接続先を追加する')
+  .requiredOption('--name <名前>', '表示名')
+  .requiredOption('--url <ベースURL>', '例: http://localhost:11434/v1')
+  .option('--model <名前>', '既定のモデル')
+  .option('--key <値>', 'APIキー（credentials.json に平文で保存されます）')
+  .option('--key-env <変数名>', 'APIキーを環境変数から読む（外部APIではこちらを推奨）')
+  .option('--timeout <秒>', '最初の応答までの待ち上限（既定120）')
+  .action(async (o) => run(() => endpointsAdd({ ...globals(), ...o })));
+endpoints
+  .command('rm <名前|ID>')
+  .description('接続先を削除する')
+  .action(async (n) => run(() => endpointsRemove(n, globals())));
+endpoints
+  .command('use <名前|ID>')
+  .description('使う接続先を切り替える')
+  .action(async (n) => run(() => endpointsUse(n, globals())));
+endpoints
+  .command('probe [名前|ID]')
+  .description('対応機能を判定して保存する')
+  .action(async (n) => run(() => endpointsProbe(n, globals())));
+
+// エージェント実行はまだ無い。あるように見せない。
+for (const [name, desc] of [
+  ['run', 'エージェント実行'],
+  ['diff', '直前の実行の差分'],
+  ['undo', '直前の実行を元に戻す'],
+  ['runs', '過去の実行の一覧'],
+] as const) {
+  program
+    .command(name, { hidden: true })
+    .description(`${desc}（未実装）`)
+    .allowUnknownOption()
+    .action(() => {
+      errorLine(`${name} はまだ実装されていません。`);
+      hintLine(
+        'エージェント実行は docs/spec/11-roadmap.md の P3 で入ります。今使えるのは chat / models / doctor / config です。',
+      );
+      process.exitCode = EXIT.usage;
+    });
+}
+
+function globals() {
+  const o = program.opts();
+  return {
+    endpoint: o.endpoint as string | undefined,
+    model: o.model as string | undefined,
+    json: o.json === true,
+    quiet: o.quiet === true,
+    verbose: o.verbose === true,
+  };
+}
+
+async function run(fn: () => Promise<void>): Promise<void> {
+  try {
+    await fn();
+  } catch (err) {
+    if (err instanceof ExitError) {
+      if (!err.silent) {
+        errorLine(err.message, err.detail);
+        if (err.hint) hintLine(err.hint);
+      }
+      process.exitCode = err.code;
+      return;
+    }
+    if (isAkariError(err)) {
+      errorLine(err.message, err.detail);
+      if (err.hint) hintLine(err.hint);
+      process.exitCode = EXIT.runtime;
+      return;
+    }
+    if ((err as Error)?.name === 'AbortError') {
+      process.exitCode = EXIT.interrupted;
+      return;
+    }
+    errorLine(messageOf(err));
+    if (process.env.AKARI_DEBUG) process.stderr.write(String((err as Error)?.stack ?? '') + '\n');
+    else hintLine('詳しい内容は AKARI_DEBUG=1 を付けて再実行すると出ます。');
+    process.exitCode = EXIT.runtime;
+  }
+}
+
+async function main(): Promise<void> {
+  const argv = process.argv;
+  if (argv.includes('--no-color') || process.env.NO_COLOR) setColor(false);
+
+  // 引数なしは、まだ何ができるかを示す。エージェント実行があるように見せない。
+  if (argv.length <= 2) {
+    out(c.bold(`Akari CLI ${VERSION}`));
+    out('');
+    program.outputHelp();
+    return;
+  }
+
+  try {
+    await program.parseAsync(argv);
+  } catch (err) {
+    if (err instanceof CommanderError) {
+      process.exitCode = err.exitCode === 0 ? EXIT.ok : EXIT.usage;
+      return;
+    }
+    throw err;
+  }
+}
+
+// パイプの先（head など）が先に閉じても落ちないようにする。
+for (const stream of [process.stdout, process.stderr]) {
+  stream.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code === 'EPIPE') process.exit(EXIT.ok);
+    throw err;
+  });
+}
+
+process.on('SIGINT', () => {
+  process.stderr.write('\n中断しました。\n');
+  process.exit(EXIT.interrupted);
+});
+
+await main();

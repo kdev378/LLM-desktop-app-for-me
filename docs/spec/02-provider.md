@@ -137,6 +137,18 @@ type ChatEvent =
 すべてのエラーは `ProviderError { kind, message, status?, bodyExcerpt?, endpointId, model }` を持つ。
 `bodyExcerpt` は先頭2KBまで。ヘッダの `Authorization` はログにも診断にも出さない。
 
+### `stream: true` を無視して一括で返すサーバ
+
+`Content-Type: application/json` が返った場合は、非ストリームの
+`chat/completions` 応答として解釈する。`choices[0].message` から本文・思考出力・
+`tool_calls` を取り出し、通常と同じイベント列（`text-delta` → `finish`）へ変換する。
+
+これは互換の欠落なので `provider.nonStreamedResponse` としてログに残す。
+体感は「一気に出る」ため、画面では通常と区別が付かない。
+
+`Content-Type` が JSON でもなく、SSE としても1件も解釈できなかった場合だけ
+`incompatible` にする。
+
 ## 再試行
 
 - **自動で再試行するのは、接続確立前の失敗のみ**（ECONNRESET / ETIMEDOUT / 5xx）。

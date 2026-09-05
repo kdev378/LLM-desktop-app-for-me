@@ -16,7 +16,15 @@ OpenAI互換APIを話す相手なら、Ollama でも llama.cpp server でも LM 
 
 ## 現在の状態
 
-**仕様のみ。実装はこれから。** → [`docs/spec/`](docs/spec/README.md)
+**CLI の接続部分まで動きます。** → [動かし方](docs/getting-started.md) / [仕様](docs/spec/README.md)
+
+```sh
+pnpm install && pnpm build
+node apps/cli/dist/index.js config endpoints add --name "ローカル" --url http://localhost:11434/v1
+node apps/cli/dist/index.js chat
+```
+
+デスクトップアプリとエージェント実行はまだありません。
 
 実装の順序と、各段階で何が確かめられるようになるかは
 [`docs/spec/11-roadmap.md`](docs/spec/11-roadmap.md) にある。
@@ -25,6 +33,10 @@ OpenAI互換APIを話す相手なら、Ollama でも llama.cpp server でも LM 
 
 ```
 docs/spec/          製品の仕様（12文書）
+docs/getting-started.md  動かし方
+packages/core/      中核（設定・API接続・診断）
+apps/cli/           CLI
+tools/              模擬LLMサーバ（開発用）
 PROJECT-CONTEXT.md  このプロジェクト固有の事実
 AGENTS.md           AIエージェント向けの開発ルールの入口
 context/            開発ルールの実体
