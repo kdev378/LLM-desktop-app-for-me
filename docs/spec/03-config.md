@@ -15,9 +15,12 @@
 <root>/
   config.json          # 設定。秘密を含まない
   credentials.json     # 鍵のみ。パーミッション 0600
+  server.json          # ハーネスAPIのトークンとポート。パーミッション 0600
   conversations/
   projects/
-  backups/
+  backups/             # 実行ごとの変更前バックアップと journal.json
+  worktrees/           # 実行ごとの git worktree（12-harness-api.md）
+  index/               # ベクトル索引（14-memory.md）
   logs/
   akari.lock           # 多重起動の検出用
 ```
@@ -73,6 +76,16 @@
 | `ui.style` | `modern` / `classic` | `modern` | 画面 | 見た目の系統（`08-ui.md`） |
 | `ui.density` | `comfortable` / `compact` | `comfortable` | 画面 | 行間と余白 |
 | `logging.level` | `error`/`warn`/`info`/`debug`/`trace` | `info` | 全体 | 再起動なしで変更が効く |
+| `memory.enabled` | 真偽 | `false` | 全体 | ベクトル索引の有効・無効（`14-memory.md`） |
+| `memory.embeddingModel` | 文字列 または null | `null` | 索引 | 未指定なら索引を作れない。推測しない |
+| `web.enabled` | 真偽 | `false` | 全体 | Web検索・取得の有効・無効（`15-web.md`） |
+| `web.consent` | `perRun`/`once`/`never` | `perRun` | Web | 外部へ問い合わせる前の確認の頻度 |
+| `web.fetch.allowPrivateHosts` | 真偽 | `false` | Web | 真にするとループバック・内部IPへも取りに行く |
+| `mcpServers[]` | 配列 | `[]` | 全体 | 外部MCPサーバ（`13-mcp.md`） |
+| `mcpServers[].trust` | `ask`/`readOnly`/`full` | `ask` | MCP | 自動実行の範囲。`readOnly` はサーバの自己申告を信じる選択 |
+| `server.port` | 1024〜65535 | `7801` | ハーネスAPI | `akari serve` の待ち受けポート |
+| `server.allowOrigins` | 文字列配列 | `[]` | ハーネスAPI | 空ならブラウザからの要求を全拒否 |
+| `agent.approvalTimeoutMs` | 整数 または null | `null` | 実行 | null は無期限。外部ツールが落ちた実行を放置したくないなら有限に |
 | `logging.retainDays` | 1〜365 | 14 | ログ | 起動時に古いファイルを削除 |
 | `concurrency.maxParallelRuns` | 1〜16 | 4 | 全体 | 超えた実行は待機列に入る |
 

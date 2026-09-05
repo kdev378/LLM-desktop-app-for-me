@@ -30,10 +30,21 @@
     <runId>/
       journal.json
       001-main.ts
+  index/
+    <indexId>/
+      meta.json                     # 埋め込みモデルと次元。合わないものは混ぜない
+      chunks.jsonl
+      vectors.bin                   # Float32Array。DBを使わない（14-memory.md）
+  worktrees/
+    <runId>/                        # git worktree。実行が終わっても消さない
+  server.json                       # ハーネスAPIのトークン。0600
   logs/
     akari-2026-09-05.log
   akari.lock
 ```
+
+`index/` と `worktrees/` は**再生成できる**か、**git に残っている**。
+`conversations/` `projects/` `backups/` は再生成できない。バックアップの優先度が違う。
 
 ファイル名に ULID を使う。時刻順に並び、衝突せず、ファイルシステムに安全な文字だけを含む。
 

@@ -69,6 +69,50 @@ akari config endpoints rm ep_local
 ```
 `set` は型と範囲を検証する。不正なら**変更せずに**、有効な範囲を示して終了コード 2 で終わる。
 
+### `akari serve`
+ハーネスAPIを立てる（`12-harness-api.md`）。
+
+| オプション | 既定 | 意味 |
+|---|---|---|
+| `--port <n>` | 7801 | 待ち受けポート |
+| `--workspace <dir>` | なし | 実行の既定の作業フォルダ |
+| `--print-token` | 偽 | トークンを標準出力へ1回だけ出す |
+| `--allow-origin <origin>` | なし | ブラウザからの要求を許すオリジン（既定は全拒否） |
+
+`127.0.0.1` にのみ bind する。`--host` は無い。
+
+### `akari mcp …`
+外部MCPサーバの登録と、Akari自身のMCP公開（`13-mcp.md`）。
+
+```sh
+akari mcp add --name fs --command npx --arg -y --arg @modelcontextprotocol/server-filesystem --arg /tmp/docs
+akari mcp add --name search --url http://localhost:9000/mcp
+akari mcp list / tools <名前> / rm <名前> / doctor
+akari mcp serve --workspace ~/proj [--http --port 7802] [--permission readOnly|autoEdit|full]
+```
+
+`add` は、実行されるコマンドを見せて同意を取ってから登録する。
+
+### `akari index …`
+ベクトル索引（`14-memory.md`）。
+
+```sh
+akari index build / update / status / rm
+akari index search "認証はどこ" -k 5
+```
+
+`build` は進行（何ファイル中何ファイル、経過時間）を出す。
+
+### `akari web …`
+Web検索と取得（`15-web.md`）。`web.enabled` が false のときは、
+実行せずに有効化の手順を示して終了コード2で終わる。
+
+```sh
+akari web search "zod v4 breaking changes"
+akari web fetch https://example.com/docs
+akari web doctor
+```
+
 ### `akari doctor`
 接続先ごとの到達性、`/models` の結果、機能判定、設定の要約、データの件数を出す。
 `--export <path>` で診断ファイルを書き出す（`09-security.md` の内容）。
@@ -127,6 +171,7 @@ akari config endpoints rm ep_local
 | `AKARI_ENDPOINT` | 既定の接続先 |
 | `AKARI_MODEL` | 既定のモデル |
 | `AKARI_PERMISSION_MODE` | 既定の権限モード |
+| `AKARI_SERVER_TOKEN` | ハーネスAPIのトークン（`serve` 時に生成せずこれを使う） |
 | `NO_COLOR` | 色を使わない |
 
 優先順位はコマンドライン引数 > 環境変数 > 設定ファイル（`03-config.md`）。

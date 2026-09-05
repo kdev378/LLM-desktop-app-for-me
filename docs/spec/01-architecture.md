@@ -18,12 +18,15 @@ CLIとデスクトップが**同じ挙動**であることを最優先の構造�
 ├─ PROJECT-CONTEXT.md
 ├─ docs/spec/                # この仕様書
 ├─ packages/
-│   └─ core/                 # @akari/core — 中核。UIもターミナルも知らない
+│   └─ core/                 # @akari/core — 中核。UIもターミナルもHTTPも知らない
 │       ├─ config/           # 設定と資格情報の読み書き・検証
-│       ├─ provider/         # OpenAI互換クライアント、ストリーム、機能判定
+│       ├─ provider/         # OpenAI互換クライアント、ストリーム、埋め込み、機能判定
 │       ├─ store/            # 会話・プロジェクトの永続化
 │       ├─ tools/            # ツール定義と実行、パス境界の検査
 │       ├─ agent/            # 実行ループ、承認要求、変更記録、取り消し
+│       ├─ mcp/              # MCPクライアント（外部サーバのツールを取り込む）
+│       ├─ memory/           # ベクトル索引の作成・更新・検索
+│       ├─ web/              # 検索とページ取得（SSRF検査を含む）
 │       ├─ diagnostics/      # ログ、問題報告用の書き出し
 │       └─ index.ts          # 公開面はここだけ
 └─ apps/
@@ -31,17 +34,28 @@ CLIとデスクトップが**同じ挙動**であることを最優先の構造�
     │   ├─ main/             # メインプロセス。core を呼ぶのはここだけ
     │   ├─ preload/          # contextBridge 経由の細い橋
     │   └─ renderer/         # React + Vite。core を直接 import しない
-    └─ cli/                  # @akari/cli — Node 実行。core を直接呼ぶ
+    ├─ cli/                  # @akari/cli — Node 実行。core を直接呼ぶ
+    └─ server/               # @akari/server — ハーネスAPI（HTTP+SSE）とMCPサーバ
 ```
 
-パッケージは3つに留める。「レイヤーごとにパッケージ」はしない。
+パッケージは4つに留める。「レイヤーごとにパッケージ」はしない。
+`server` を分けるのは、CLIやデスクトップと**利用者が違う**（人ではなく他のプログラム）ためで、
+層が違うからではない。`akari serve` は CLI から `@akari/server` を遅延 import して起動する。
 
 ## 依存の向き
 
 ```
 apps/desktop/renderer ─(IPC)→ apps/desktop/main ─→ packages/core
 apps/cli ───────────────────────────────────────→ packages/core
+apps/cli (serve) ─→ apps/server ────────────────→ packages/core
+外部のマルチエージェントツール ─(HTTP/SSE)→ apps/server ─→ packages/core
+外部のMCPクライアント ─────────(MCP)────→ apps/server ─→ packages/core
+packages/core/mcp ─(MCP)→ 外部のMCPサーバ群
+packages/core/web ─(HTTPS)→ 検索API / 任意のWebページ
 ```
+
+`core` から外へ出ていく線は2本だけ（MCPサーバ群、Web）。
+どちらも既定で無効か、明示的な同意を経る（`13-mcp.md` / `15-web.md`）。
 
 - `core` は他のどれにも依存しない。Electron API、DOM、`process.stdout` への直接書き込みを含まない。
 - `renderer` は `core` を直接 import しない。Node の権限をUI層へ持ち込まないため。
@@ -140,6 +154,9 @@ renderer は「表示用の写し」だけを持つ。書き込みは必ずメ�
 | TypeScript（strict） | 中核の契約を型で固定でき、CLI/デスクトップの取り違えを減らす | — | — |
 | JSONファイル保存（DBなし） | ネイティブモジュール不要で3OS×Electron×Nodeの組み合わせが増えない。手で読める | 全文検索が線形。1万会話規模で遅くなる | SQLite へ移行（`07-data.md` に移行方針） |
 | pnpm workspace | 依存の重複を避け、ローカル参照が素直 | — | npm workspaces |
+| ベクトル索引は自前のフラットファイル＋総当たり | ネイティブモジュールを増やさない。個人用の規模なら足りる見込み | 20万チャンク規模で遅くなる | 近似検索ライブラリへ（`14-memory.md`） |
+| 拡張の口はMCPだけ。独自プラグイン機構を作らない | 口が1つなら、安全の検討も1箇所で済む | MCPの仕様変更に追随が要る | — |
+| ハーネスAPIは localhost 限定＋トークン | ファイル編集とコマンド実行を公開する口だから | 遠隔から使うには利用者が自分でトンネルを張る必要がある | 認証方式を足す（`12-harness-api.md`） |
 
 **未検証の仮定**: Electron の待機時メモリは実測していない。P6 で対象3OSで測り、目標
 （待機時 300MB 以下）を満たさなければ、レンダラの常駐要素を削るか Tauri を再検討する。

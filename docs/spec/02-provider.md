@@ -18,12 +18,27 @@
 
 使うのはこの2つだけ。増やすときは仕様を更新する。
 
-| メソッド | パス | 用途 |
-|---|---|---|
-| GET | `{baseUrl}/models` | モデル一覧、接続確認 |
-| POST | `{baseUrl}/chat/completions` | 生成（常に `stream: true`） |
+| メソッド | パス | 用途 | いつ |
+|---|---|---|---|
+| GET | `{baseUrl}/models` | モデル一覧、接続確認 | 常時 |
+| POST | `{baseUrl}/chat/completions` | 生成（常に `stream: true`） | 常時 |
+| POST | `{baseUrl}/embeddings` | ベクトル索引の作成・検索 | `memory.enabled` のときだけ |
 
-`/completions`（legacy）、`/embeddings`、`/responses` は使わない。
+`/completions`（legacy）と `/responses` は使わない。
+
+### `/embeddings`
+
+```ts
+Provider.embed(texts: string[], model: string, signal?): Promise<Float32Array[]>
+```
+
+- 送るのは `{ model, input: string[] }`。返る `data[].embedding` を順に取る。
+  `index` フィールドがあれば**それで並べ直す**（順序を保証しないサーバがあるため）。
+- 404 / 400 が返る接続先は「埋め込み非対応」として記録し、索引機能を無効にする。
+  対応していないことを、対応しているように見せない。
+- 1回に送る件数は `memory.batchSize`（既定16）。413 か 400 が返ったら半分にして1度だけ再試行する。
+- 返ったベクトルの次元が索引の `dims` と違えば、その場で失敗させる。混ぜない。
+- 詳細は `14-memory.md`。
 
 ## 接続先の定義
 
