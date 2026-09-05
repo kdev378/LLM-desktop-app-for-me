@@ -66,6 +66,8 @@ export type SessionOptions = {
 const MAX_CALLS_PER_STEP = 8;
 /** 同じツール・同じ引数がこの回数続いたらループとみなす。 */
 const LOOP_THRESHOLD = 3;
+/** 代替方式で1回の応答から受け付けるブロック数（docs/spec/02-provider.md）。 */
+const MAX_PROMPTED_CALLS_PER_STEP = 3;
 
 export class Session {
   readonly runId: string;
@@ -256,8 +258,18 @@ export class Session {
       if (promptedTools) {
         const extracted = extractPromptedCalls(text);
         promptedErrors = extracted.errors;
+        if (extracted.calls.length > MAX_PROMPTED_CALLS_PER_STEP) {
+          // 黙って捨てない。何を実行しなかったかをモデルにも利用者にも伝える。
+          const dropped = extracted.calls
+            .slice(MAX_PROMPTED_CALLS_PER_STEP)
+            .map((c) => c.name)
+            .join(', ');
+          promptedErrors.push(
+            `1回の応答に ${extracted.calls.length} 個のブロックがありました。上限 ${MAX_PROMPTED_CALLS_PER_STEP} 個までを実行し、残りは実行していません: ${dropped}`,
+          );
+        }
         calls = extracted.calls
-          .slice(0, 3)
+          .slice(0, MAX_PROMPTED_CALLS_PER_STEP)
           .map((c) => ({ id: shortId('call_'), name: c.name, argumentsRaw: c.argumentsRaw }));
       }
 
@@ -271,10 +283,14 @@ export class Session {
         for (const e of promptedErrors) yield { type: 'notice', level: 'warn', message: e };
         this.messages.push({
           role: 'user',
-          content: `[akari] 次の形式エラーがありました。その形式では受け取れません。\n${promptedErrors.join('\n')}`,
+          content: `[akari] 次の問題がありました。\n${promptedErrors.join('\n')}`,
         });
-        yield { type: 'step-end', step, ...(usage ? { usage } : {}) };
-        continue;
+        // 読めたブロックが1つも無いときだけ、やり直させる。
+        // 読めたものがあるなら、それは実行してから続ける。
+        if (calls.length === 0) {
+          yield { type: 'step-end', step, ...(usage ? { usage } : {}) };
+          continue;
+        }
       }
 
       if (calls.length === 0) {

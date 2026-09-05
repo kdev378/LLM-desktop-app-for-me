@@ -44,7 +44,7 @@ export {
   buildRequestBody,
   type ProviderOptions,
 } from './provider/openai.js';
-export { probeEndpoint } from './provider/probe.js';
+export { probeEndpoint, resolveToolsMode, type ToolsModeResolution } from './provider/probe.js';
 export { SseParser, ToolCallBuffer } from './provider/sse.js';
 export {
   classifyHttp,

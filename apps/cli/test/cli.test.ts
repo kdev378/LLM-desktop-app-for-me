@@ -401,3 +401,90 @@ test('サブコマンド名でない引数は run とみなす（akari "…" の
     assert.match(r.stdout, /こんにちは/);
   });
 });
+
+test('ツール非対応モデルでも、代替方式に切り替わって実行できる', async () => {
+  const dir = await sandbox({ 'main.ts': 'const timeout = 1000;\n' });
+  const fence = '```akari-tool';
+  const script = [
+    {
+      text:
+        '変えます。\n' +
+        fence +
+        '\n' +
+        JSON.stringify({
+          name: 'edit_file',
+          arguments: {
+            path: 'main.ts',
+            oldText: 'const timeout = 1000;',
+            newText: 'const timeout = 5000;',
+          },
+        }) +
+        '\n```',
+    },
+    { text: '変更しました。' },
+  ];
+
+  const proc = spawn(process.execPath, [MOCK, '11807'], {
+    stdio: 'ignore',
+    env: { ...process.env, AKARI_MOCK_SCRIPT: JSON.stringify(script), AKARI_MOCK_NO_TOOLS: '1' },
+  });
+  try {
+    const deadline = Date.now() + 5000;
+    for (;;) {
+      try {
+        const r = await fetch('http://127.0.0.1:11807/v1/models');
+        if (r.ok) {
+          await r.text();
+          break;
+        }
+      } catch {
+        /* まだ */
+      }
+      if (Date.now() > deadline) throw new Error('模擬サーバが起動しませんでした');
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    await akari([
+      'config',
+      'endpoints',
+      'add',
+      '--name',
+      'notools',
+      '--url',
+      'http://127.0.0.1:11807/v1',
+      '--model',
+      'mock-chat-7b',
+    ]);
+
+    const r = await akari([
+      '-e',
+      'notools',
+      'run',
+      '--permission',
+      'full',
+      '-C',
+      dir,
+      '-p',
+      'timeout を変えて',
+    ]);
+    assert.equal(r.code, 0);
+    // 自動判定が働き、代替方式に切り替わったこと
+    assert.match(r.stdout, /代替方式/);
+    // 実際にツールが実行されたこと
+    assert.equal(await fs.readFile(path.join(dir, 'main.ts'), 'utf8'), 'const timeout = 5000;\n');
+    // 生のブロックが画面に出ていないこと
+    assert.ok(!r.stdout.includes('akari-tool'), '本文のブロックは画面から隠す');
+    assert.ok(!r.stdout.includes('"oldText"'), '引数のJSONが素で出ない');
+  } finally {
+    proc.kill('SIGKILL');
+  }
+});
+
+test('判定結果が設定へ保存され、2回目は判定し直さない', async () => {
+  const cfgBefore = JSON.parse(await fs.readFile(path.join(home, 'config.json'), 'utf8')) as {
+    endpoints: Array<{ name: string; capabilities: { tools: string; probedModel: string | null } }>;
+  };
+  const ep = cfgBefore.endpoints.find((e) => e.name === 'notools');
+  assert.ok(ep, '前のテストで登録した接続先があること');
+  assert.equal(ep!.capabilities.tools, 'prompted', '判定結果が保存されていること');
+  assert.equal(ep!.capabilities.probedModel, 'mock-chat-7b');
+});

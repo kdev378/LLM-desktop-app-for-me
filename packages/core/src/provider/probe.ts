@@ -133,3 +133,74 @@ export async function probeEndpoint(
     ...(error ? { error } : {}),
   };
 }
+
+/**
+ * 使うモデルに対して、ツール呼び出しの方式を確定させる。
+ *
+ * `capabilities.tools` が `auto` のまま実行すると、ツール非対応のモデルへ
+ * ネイティブのツール定義を渡し、モデルが何も呼ばずに終わる（＝何も起きない）。
+ * それを避けるため、未判定なら実行前に1度だけ判定する。
+ *
+ * 判定はモデルごとに変わる（docs/spec/02-provider.md）ので、
+ * 前に判定したモデルと違うときも判定し直す。
+ */
+export type ToolsModeResolution = {
+  mode: 'native' | 'prompted' | 'none';
+  /** 今回あらためて判定したか。false なら保存済みの値をそのまま使った。 */
+  probed: boolean;
+  notes: string[];
+  /** 判定した場合、保存すべき新しい capabilities。 */
+  capabilities?: {
+    tools: 'native' | 'prompted' | 'none';
+    usageReported: boolean;
+    streamsToolCalls: boolean;
+    probedAt: string;
+    probedModel: string;
+  };
+};
+
+export async function resolveToolsMode(
+  provider: Provider,
+  current: { tools: 'auto' | 'native' | 'prompted' | 'none'; probedModel: string | null },
+  model: string,
+  signal?: AbortSignal,
+): Promise<ToolsModeResolution> {
+  const needsProbe = current.tools === 'auto' || current.probedModel !== model;
+  if (!needsProbe) {
+    return { mode: current.tools as 'native' | 'prompted' | 'none', probed: false, notes: [] };
+  }
+
+  const why =
+    current.tools === 'auto'
+      ? 'ツール呼び出しへの対応が未判定のため'
+      : `前回の判定は ${current.probedModel} に対するものだったため`;
+
+  const result = await probeEndpoint(provider, provider.endpointId, model, signal);
+  if (!result.reachable) {
+    // 判定できなかった。動くふりをせず、そのまま伝える。
+    return {
+      mode: 'none',
+      probed: false,
+      notes: [`${why}判定を試みましたが、接続先に到達できませんでした。`],
+    };
+  }
+
+  return {
+    mode: result.tools,
+    probed: true,
+    notes: [`${why}、${model} で判定しました: ${describeMode(result.tools)}`, ...result.notes],
+    capabilities: {
+      tools: result.tools,
+      usageReported: result.usageReported,
+      streamsToolCalls: result.streamsToolCalls,
+      probedAt: new Date().toISOString(),
+      probedModel: model,
+    },
+  };
+}
+
+function describeMode(mode: 'native' | 'prompted' | 'none'): string {
+  if (mode === 'native') return 'ツール呼び出しに対応';
+  if (mode === 'prompted') return '非対応のため代替方式（prompted）を使います';
+  return '判定できませんでした';
+}

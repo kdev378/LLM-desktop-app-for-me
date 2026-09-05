@@ -4,14 +4,16 @@ import {
   Workspace,
   Session,
   createProvider,
+  resolveToolsMode,
+  updateEndpoint,
   ALL_TOOL_NAMES,
   READ_ONLY_TOOL_NAMES,
   type ApprovalDecision,
   type RunEvent,
   type PermissionMode,
 } from '@akari/core';
-import { createContext, pickEndpoint, pickModel, type GlobalOptions } from '../context.js';
-import { c, out, write, isInteractive, formatDuration } from '../term.js';
+import { createContext, pickEndpoint, pickModel, persist, type GlobalOptions } from '../context.js';
+import { c, out, write, note, isInteractive, formatDuration } from '../term.js';
 import { ExitError, EXIT } from '../exit.js';
 
 /**
@@ -59,6 +61,32 @@ export async function runCommand(promptArgs: string[], opts: RunOptions): Promis
     (await provider.listModels()).map((m) => m.id),
   );
 
+  // ツール呼び出しの方式を確定させてから実行する。
+  // 未判定のまま非対応モデルへネイティブのツール定義を渡すと、
+  // モデルが何も呼ばず「何も起きずに終わった」ように見えてしまう。
+  const toolsMode = await resolveToolsMode(
+    provider,
+    { tools: endpoint.capabilities.tools, probedModel: endpoint.capabilities.probedModel },
+    model,
+  );
+  if (!ctx.json && !ctx.quiet) {
+    for (const n of toolsMode.notes) note(n);
+  }
+  if (toolsMode.capabilities) {
+    // 判定結果は保存する。毎回判定し直さないため。
+    await persist(
+      ctx,
+      updateEndpoint(ctx.config, endpoint.id, {
+        capabilities: { ...endpoint.capabilities, ...toolsMode.capabilities },
+      }),
+    ).catch(() => undefined);
+  }
+  if (toolsMode.mode === 'none' && !opts.noTools) {
+    throw new ExitError(EXIT.runtime, `${model} がツールを使えるか判定できませんでした。`, {
+      hint: 'akari config endpoints probe で判定し直すか、--no-tools で生成だけ行ってください。',
+    });
+  }
+
   const maxSteps = opts.maxSteps !== undefined ? Number(opts.maxSteps) : ctx.config.agent.maxSteps;
   if (!Number.isInteger(maxSteps) || maxSteps < 1 || maxSteps > 200) {
     throw new ExitError(EXIT.usage, '--max-steps は 1〜200 の整数で指定してください。');
@@ -73,7 +101,7 @@ export async function runCommand(promptArgs: string[], opts: RunOptions): Promis
     permissionMode,
     toolNames,
     maxSteps,
-    promptedTools: endpoint.capabilities.tools === 'prompted',
+    promptedTools: toolsMode.mode === 'prompted',
     limits: {
       commandTimeoutMs: ctx.config.agent.commandTimeoutMs,
       toolOutputLimitBytes: ctx.config.agent.toolOutputLimitBytes,
@@ -91,6 +119,9 @@ export async function runCommand(promptArgs: string[], opts: RunOptions): Promis
     session.abort();
   };
   process.on('SIGINT', onSigint);
+
+  // 代替方式では、本文に混ざるブロックを画面から隠す（内容は tool-call 行に出る）
+  const blockFilter = toolsMode.mode === 'prompted' && !ctx.json ? createBlockFilter() : null;
 
   const started = Date.now();
   let deniedForNonInteractive = false;
@@ -115,14 +146,21 @@ export async function runCommand(promptArgs: string[], opts: RunOptions): Promis
             out('');
           }
           break;
-        case 'text-delta':
-          if (!ctx.json) {
-            write(ev.text);
+        case 'text-delta': {
+          if (ctx.json) break;
+          const shown = blockFilter ? blockFilter.feed(ev.text) : ev.text;
+          if (shown !== '') {
+            write(shown);
             lastWasText = true;
           }
           break;
+        }
         case 'tool-call':
           if (!ctx.json) {
+            if (blockFilter) {
+              const rest = blockFilter.flush();
+              if (rest.trim() !== '') write(rest);
+            }
             if (lastWasText) {
               out('');
               lastWasText = false;
@@ -161,6 +199,10 @@ export async function runCommand(promptArgs: string[], opts: RunOptions): Promis
         case 'run-end': {
           endReason = ev.reason;
           if (!ctx.json) {
+            if (blockFilter) {
+              const rest = blockFilter.flush();
+              if (rest.trim() !== '') write(rest);
+            }
             if (lastWasText) out('');
             out('');
             out(c.dim(`${describeEnd(ev.reason)}  ${formatDuration(Date.now() - started)}`));
@@ -290,6 +332,55 @@ async function askApproval(
   } finally {
     rl.close();
   }
+}
+
+/**
+ * 代替方式のとき、本文に混ざる akari-tool ブロックを画面から隠す。
+ * 呼び出しの内容は直後の tool-call 行に出るので、情報は失われない。
+ * チャンクの途中でフェンスが割れても壊れないよう、末尾を持ち越す。
+ */
+function createBlockFilter(): { feed: (chunk: string) => string; flush: () => string } {
+  const OPEN = '```akari-tool';
+  const CLOSE = '```';
+  let buf = '';
+  let hidden = false;
+
+  const feed = (chunk: string): string => {
+    buf += chunk;
+    let out = '';
+    for (;;) {
+      if (!hidden) {
+        const i = buf.indexOf(OPEN);
+        if (i === -1) {
+          // フェンスの先頭が末尾に掛かっているかもしれない分だけ残す
+          const keep = Math.min(buf.length, OPEN.length - 1);
+          out += buf.slice(0, buf.length - keep);
+          buf = buf.slice(buf.length - keep);
+          return out;
+        }
+        out += buf.slice(0, i);
+        buf = buf.slice(i + OPEN.length);
+        hidden = true;
+      } else {
+        const j = buf.indexOf(CLOSE);
+        if (j === -1) {
+          const keep = Math.min(buf.length, CLOSE.length - 1);
+          buf = buf.slice(buf.length - keep);
+          return out;
+        }
+        buf = buf.slice(j + CLOSE.length);
+        hidden = false;
+      }
+    }
+  };
+
+  const flush = (): string => {
+    const rest = hidden ? '' : buf;
+    buf = '';
+    return rest;
+  };
+
+  return { feed, flush };
 }
 
 async function readStdin(): Promise<string> {

@@ -12,14 +12,20 @@ import http from 'node:http';
 const port = Number(process.argv[2] ?? 11499);
 const MODELS = ['mock-chat-7b', 'mock-coder-14b'];
 
-// エージェントの動作確認用の台本。呼ばれるたびに1つ進む。
-let callIndex = 0;
+// エージェントの動作確認用の台本。
+// 「その会話で何ターン目か」で引く。呼び出し回数で数えると、
+// probe や chat の分まで消費してしまい、run が台本の途中から始まってしまう。
 function readScript() {
   try {
     return JSON.parse(process.env.AKARI_MOCK_SCRIPT ?? '[]');
   } catch {
     return [];
   }
+}
+
+function turnIndex(payload) {
+  const messages = Array.isArray(payload.messages) ? payload.messages : [];
+  return messages.filter((m) => m && m.role === 'assistant').length;
 }
 
 const server = http.createServer((req, res) => {
@@ -50,7 +56,10 @@ const server = http.createServer((req, res) => {
       /* 下で扱う */
     }
     const last = [...(payload.messages ?? [])].reverse().find((m) => m.role === 'user');
-    const wantsTool = Array.isArray(payload.tools) && payload.tools.length > 0;
+    // AKARI_MOCK_NO_TOOLS=1 で「ツールを理解しないモデル」を再現する。
+    // Gemma 系のようにツール用テンプレートを持たないモデルの挙動にあたる。
+    const ignoreTools = process.env.AKARI_MOCK_NO_TOOLS === '1';
+    const wantsTool = !ignoreTools && Array.isArray(payload.tools) && payload.tools.length > 0;
 
     res.writeHead(200, {
       'content-type': 'text/event-stream',
@@ -65,8 +74,7 @@ const server = http.createServer((req, res) => {
     if (wantsTool) {
       // AKARI_MOCK_SCRIPT に台本を書くと、呼ばれるたびに1つ進む。
       // 例: '[{"name":"write_file","arguments":{"path":"a.txt","content":"x"}},{"text":"完了"}]'
-      const step = readScript()[callIndex] ?? null;
-      callIndex += 1;
+      const step = readScript()[turnIndex(payload)] ?? null;
       if (step && step.text) {
         for (const piece of [...step.text]) send({ content: piece });
         send({}, 'stop');
@@ -80,7 +88,7 @@ const server = http.createServer((req, res) => {
         tool_calls: [
           {
             index: 0,
-            id: `call_${callIndex}`,
+            id: `call_${turnIndex(payload)}`,
             type: 'function',
             function: { name, arguments: '' },
           },
@@ -98,7 +106,12 @@ const server = http.createServer((req, res) => {
       return;
     }
 
-    const reply = `（模擬サーバの応答）受け取った文: ${(last?.content ?? '').slice(0, 60)}\nこれはテスト用の固定応答です。本物のモデルは動いていません。`;
+    // 台本に text があればそれを返す。無ければ入力をなぞった固定文。
+    const scriptedStep = readScript()[turnIndex(payload)] ?? null;
+    const reply =
+      typeof scriptedStep?.text === 'string'
+        ? scriptedStep.text
+        : `（模擬サーバの応答）受け取った文: ${(last?.content ?? '').slice(0, 60)}\nこれはテスト用の固定応答です。本物のモデルは動いていません。`;
     let i = 0;
     const tokens = [...reply];
     const timer = setInterval(() => {
