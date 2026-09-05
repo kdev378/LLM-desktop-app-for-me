@@ -46,10 +46,12 @@ after(() => {
 function akari(
   args: string[],
   input?: string,
+  opts: { cwd?: string; env?: Record<string, string> } = {},
 ): Promise<{ code: number; stdout: string; stderr: string }> {
   return new Promise((resolve) => {
     const p = spawn(process.execPath, [CLI, ...args], {
-      env: { ...process.env, AKARI_HOME: home, NO_COLOR: '1' },
+      env: { ...process.env, AKARI_HOME: home, NO_COLOR: '1', ...opts.env },
+      ...(opts.cwd ? { cwd: opts.cwd } : {}),
       stdio: ['pipe', 'pipe', 'pipe'],
     });
     let stdout = '',
@@ -159,9 +161,11 @@ test('到達できない接続先は終了コード4', async () => {
 });
 
 test('未実装のコマンドは、あるように見せず終了コード2', async () => {
-  const r = await akari(['run', 'なにか']);
-  assert.equal(r.code, 2);
-  assert.match(r.stderr, /まだ実装されていません/);
+  for (const name of ['serve', 'mcp', 'index', 'web']) {
+    const r = await akari([name]);
+    assert.equal(r.code, 2, `${name} は未実装として終了コード2`);
+    assert.match(r.stderr, /まだ実装されていません/);
+  }
 });
 
 test('診断の書き出しに鍵と会話本文が含まれない', async () => {
@@ -204,4 +208,196 @@ test('--version がバージョンを出す', async () => {
   const r = await akari(['--version']);
   assert.equal(r.code, 0);
   assert.match(r.stdout, /0\.1\.0/);
+});
+
+// ---------------- エージェント実行 ----------------
+
+/** 台本を渡した模擬サーバを、その試験だけのポートで立てる。 */
+async function withScriptedServer<T>(
+  port: number,
+  script: unknown[],
+  fn: (endpointName: string) => Promise<T>,
+): Promise<T> {
+  const proc = spawn(process.execPath, [MOCK, String(port)], {
+    stdio: 'ignore',
+    env: { ...process.env, AKARI_MOCK_SCRIPT: JSON.stringify(script) },
+  });
+  try {
+    const deadline = Date.now() + 5000;
+    for (;;) {
+      try {
+        const r = await fetch(`http://127.0.0.1:${port}/v1/models`);
+        if (r.ok) {
+          await r.text();
+          break;
+        }
+      } catch {
+        /* まだ */
+      }
+      if (Date.now() > deadline) throw new Error('模擬サーバが起動しませんでした');
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    const name = `script-${port}`;
+    await akari([
+      'config',
+      'endpoints',
+      'add',
+      '--name',
+      name,
+      '--url',
+      `http://127.0.0.1:${port}/v1`,
+      '--model',
+      'mock-coder-14b',
+    ]);
+    return await fn(name);
+  } finally {
+    proc.kill('SIGKILL');
+  }
+}
+
+async function sandbox(files: Record<string, string>): Promise<string> {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'akari-sbx-'));
+  for (const [p, content] of Object.entries(files)) {
+    const abs = path.join(dir, p);
+    await fs.mkdir(path.dirname(abs), { recursive: true });
+    await fs.writeFile(abs, content);
+  }
+  return await fs.realpath(dir);
+}
+
+test('非対話で承認が要る操作は自動拒否され、終了コード3。ファイルは無傷', async () => {
+  const dir = await sandbox({ 'a.txt': '元\n' });
+  await withScriptedServer(
+    11801,
+    [
+      { name: 'write_file', arguments: { path: 'a.txt', content: '書き換え\n' } },
+      { text: '拒否されました' },
+    ],
+    async (ep) => {
+      const r = await akari(['-e', ep, 'run', '-C', dir, '-p', '書き換えて']);
+      assert.equal(r.code, 3);
+      assert.match(r.stderr, /承認が得られなかった/);
+      assert.equal(await fs.readFile(path.join(dir, 'a.txt'), 'utf8'), '元\n');
+    },
+  );
+});
+
+test('full なら書き換えが通り、diff と undo が効く', async () => {
+  const dir = await sandbox({ 'a.txt': '元\n' });
+  await withScriptedServer(
+    11802,
+    [{ name: 'write_file', arguments: { path: 'a.txt', content: '新\n' } }, { text: '書きました' }],
+    async (ep) => {
+      const r = await akari(['-e', ep, 'run', '--permission', 'full', '-C', dir, '-p', '書いて']);
+      assert.equal(r.code, 0);
+      assert.equal(await fs.readFile(path.join(dir, 'a.txt'), 'utf8'), '新\n');
+
+      const d = await akari(['diff']);
+      assert.equal(d.code, 0);
+      assert.match(d.stdout, /-元/);
+      assert.match(d.stdout, /\+新/);
+
+      const u = await akari(['undo', '-y']);
+      assert.equal(u.code, 0);
+      assert.equal(await fs.readFile(path.join(dir, 'a.txt'), 'utf8'), '元\n');
+    },
+  );
+});
+
+test('最も緩い full でも、作業フォルダの外へは出られない', async () => {
+  const dir = await sandbox({ 'a.txt': 'x\n' });
+  const outside = path.join(path.dirname(dir), `escape-${Date.now()}.txt`);
+  await withScriptedServer(
+    11803,
+    [
+      {
+        name: 'write_file',
+        arguments: { path: `../${path.basename(outside)}`, content: 'のっとり' },
+      },
+      { name: 'read_file', arguments: { path: '../../etc/passwd' } },
+      { name: 'run_command', arguments: { command: 'echo hi', cwd: '../..' } },
+      { text: '出られませんでした' },
+    ],
+    async (ep) => {
+      const r = await akari([
+        '-e',
+        ep,
+        'run',
+        '--permission',
+        'full',
+        '-C',
+        dir,
+        '-p',
+        '外を触って',
+      ]);
+      assert.equal(r.code, 0);
+      assert.equal((r.stdout.match(/作業フォルダの外/g) ?? []).length, 3, '3件とも拒否されること');
+      await assert.rejects(() => fs.stat(outside), '外にファイルが作られないこと');
+    },
+  );
+});
+
+test('--json のエージェント実行は全行がNDJSONで、run-end で終わる', async () => {
+  const dir = await sandbox({ 'a.txt': 'x\n' });
+  await withScriptedServer(
+    11804,
+    [{ name: 'read_file', arguments: { path: 'a.txt' } }, { text: '読みました' }],
+    async (ep) => {
+      const r = await akari([
+        '--json',
+        '-e',
+        ep,
+        'run',
+        '--permission',
+        'full',
+        '-C',
+        dir,
+        '-p',
+        '読んで',
+      ]);
+      assert.equal(r.code, 0);
+      const events = r.stdout
+        .trim()
+        .split('\n')
+        .map((l) => JSON.parse(l) as { type: string });
+      assert.equal(events[0]!.type, 'run-start');
+      assert.equal(events.at(-1)!.type, 'run-end');
+      assert.ok(events.some((e) => e.type === 'tool-result'));
+      assert.equal(r.stderr.trim(), '');
+    },
+  );
+});
+
+test('実行後に手で変えたファイルは undo で上書きされず、理由が出る', async () => {
+  const dir = await sandbox({ 'a.txt': '元\n' });
+  await withScriptedServer(
+    11805,
+    [
+      { name: 'write_file', arguments: { path: 'a.txt', content: 'エージェント\n' } },
+      { text: '完了' },
+    ],
+    async (ep) => {
+      await akari(['-e', ep, 'run', '--permission', 'full', '-C', dir, '-p', '書いて']);
+      await fs.writeFile(path.join(dir, 'a.txt'), '人が直した\n');
+      const u = await akari(['undo', '-y']);
+      assert.match(u.stdout, /戻せなかったもの/);
+      assert.match(u.stdout, /手で変更/);
+      assert.equal(await fs.readFile(path.join(dir, 'a.txt'), 'utf8'), '人が直した\n');
+    },
+  );
+});
+
+test('作業フォルダが広すぎる場所なら実行を断る', async () => {
+  const r = await akari(['run', '-C', os.homedir(), '-p', 'なにか']);
+  assert.equal(r.code, 2);
+  assert.match(r.stderr, /ホームディレクトリ/);
+});
+
+test('サブコマンド名でない引数は run とみなす（akari "…" の短縮形）', async () => {
+  const dir = await sandbox({ 'a.txt': 'x\n' });
+  await withScriptedServer(11806, [{ text: 'こんにちは' }], async (ep) => {
+    const r = await akari(['ファイルを見て'], undefined, { cwd: dir, env: { AKARI_ENDPOINT: ep } });
+    assert.equal(r.code, 0);
+    assert.match(r.stdout, /こんにちは/);
+  });
 });

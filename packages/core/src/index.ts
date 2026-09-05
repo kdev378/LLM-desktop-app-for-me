@@ -68,6 +68,72 @@ export type {
   Role,
 } from './provider/types.js';
 
+// ツール（作業フォルダの境界）
+export {
+  Workspace,
+  isInside,
+  isInsideOrSame,
+  samePath,
+  type AccessMode,
+  type ResolveResult,
+  type ResolveOk,
+  type ResolveDenied,
+} from './tools/workspace.js';
+
+// ツールとエージェント
+export {
+  BUILTIN_TOOLS,
+  ALL_TOOL_NAMES,
+  READ_ONLY_TOOL_NAMES,
+  selectTools,
+  toolDefinitions,
+  findTool,
+} from './tools/registry.js';
+export {
+  DEFAULT_LIMITS,
+  type ToolSpec,
+  type ToolContext,
+  type ToolResult,
+  type ToolLimits,
+  type ToolPreview,
+  type Risk,
+} from './tools/types.js';
+export {
+  walk,
+  globToRegExp,
+  matchGlob,
+  toPosix,
+  looksBinary,
+  truncateMiddle,
+  DEFAULT_IGNORE_DIRS,
+} from './tools/walk.js';
+export { commandScope, matchesDenied } from './tools/command.js';
+export {
+  ChangeJournal,
+  pruneBackups,
+  sha256OfFile,
+  type FileChange,
+  type ChangeOp,
+  type UndoResult,
+  type JournalFile,
+} from './agent/journal.js';
+export { Session, type SessionOptions } from './agent/session.js';
+export {
+  approvalOptions,
+  type RunEvent,
+  type RunEndReason,
+  type ApprovalDecision,
+  type ApprovalOption,
+} from './agent/events.js';
+export {
+  buildSystemPrompt,
+  loadInstructionFiles,
+  extractPromptedCalls,
+  formatPromptedResult,
+  INSTRUCTION_FILES,
+  type LoadedInstruction,
+} from './agent/prompt.js';
+
 // 診断
 export {
   createLogger,
@@ -89,6 +155,13 @@ export {
 export { akariHome, paths, ensureDir, tildify } from './util/paths.js';
 export { ulid, shortId } from './util/ids.js';
 export { readJson, writeJsonAtomic, writeFileAtomic } from './util/json.js';
+export {
+  diffLines,
+  formatUnifiedDiff,
+  type DiffResult,
+  type DiffHunk,
+  type DiffLine,
+} from './util/diff.js';
 export { AkariError, isAkariError, messageOf } from './util/errors.js';
 
 export const CORE_VERSION = '0.1.0';

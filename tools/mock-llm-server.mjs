@@ -12,6 +12,16 @@ import http from 'node:http';
 const port = Number(process.argv[2] ?? 11499);
 const MODELS = ['mock-chat-7b', 'mock-coder-14b'];
 
+// エージェントの動作確認用の台本。呼ばれるたびに1つ進む。
+let callIndex = 0;
+function readScript() {
+  try {
+    return JSON.parse(process.env.AKARI_MOCK_SCRIPT ?? '[]');
+  } catch {
+    return [];
+  }
+}
+
 const server = http.createServer((req, res) => {
   const body = [];
   req.on('data', (c) => body.push(c));
@@ -53,14 +63,30 @@ const server = http.createServer((req, res) => {
       );
 
     if (wantsTool) {
-      // 機能判定でツール対応と見えるようにする
-      const name = payload.tools[0]?.function?.name ?? 'unknown_tool';
+      // AKARI_MOCK_SCRIPT に台本を書くと、呼ばれるたびに1つ進む。
+      // 例: '[{"name":"write_file","arguments":{"path":"a.txt","content":"x"}},{"text":"完了"}]'
+      const step = readScript()[callIndex] ?? null;
+      callIndex += 1;
+      if (step && step.text) {
+        for (const piece of [...step.text]) send({ content: piece });
+        send({}, 'stop');
+        res.write('data: [DONE]\n\n');
+        res.end();
+        return;
+      }
+      const name = step?.name ?? payload.tools[0]?.function?.name ?? 'unknown_tool';
+      const toolArgs = JSON.stringify(step?.arguments ?? { label: 'probe' });
       send({
         tool_calls: [
-          { index: 0, id: 'call_mock', type: 'function', function: { name, arguments: '' } },
+          {
+            index: 0,
+            id: `call_${callIndex}`,
+            type: 'function',
+            function: { name, arguments: '' },
+          },
         ],
       });
-      send({ tool_calls: [{ index: 0, function: { arguments: '{"label":"probe"}' } }] });
+      send({ tool_calls: [{ index: 0, function: { arguments: toolArgs } }] });
       send({}, 'tool_calls');
       if (payload.stream_options?.include_usage) {
         res.write(

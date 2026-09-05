@@ -17,6 +17,8 @@ import {
   endpointsUse,
   endpointsProbe,
 } from './commands/config.js';
+import { runCommand } from './commands/run.js';
+import { runsCommand, diffCommand, undoCommand } from './commands/runs.js';
 
 /**
  * akari CLI。仕様: docs/spec/10-cli.md
@@ -42,14 +44,49 @@ program
 例:
   akari config endpoints add --name "ローカル" --url http://localhost:11434/v1
   akari doctor                        接続と設定の状態を見る
-  akari models                        モデル一覧
-  akari chat                          対話する
-  akari chat -p "TypeScriptとは"       一回だけ聞く
+  akari chat                          対話する（ファイルは触らない）
+  akari run "テストを通して"           エージェント実行（作業フォルダの中だけ）
+  akari diff                          直前の実行が何を変えたか
+  akari undo                          直前の実行を元に戻す
   echo "要約して" | akari chat         標準入力から
 
-まだ実装されていないもの: run / diff / undo / runs（エージェント実行。docs/spec/11-roadmap.md の P3）
+まだ実装されていないもの: serve / mcp / index / web（docs/spec/11-roadmap.md の P2〜P5）
 `,
   );
+
+program
+  .command('run [プロンプト...]')
+  .description('エージェント実行。作業フォルダの中でファイルを読み書きし、コマンドを実行する')
+  .option('-C, --cwd <dir>', '作業フォルダ。既定はカレント')
+  .option('-p, --prompt <文>', 'プロンプト。省略時は引数か標準入力から')
+  .option('--permission <mode>', 'ask / auto-edit / full')
+  .option('-y, --yes', '--permission auto-edit と同じ')
+  .option('--max-steps <n>', 'ステップ上限')
+  .option('--no-tools', 'ツールを渡さない（純粋な生成）')
+  .option('--read-only', '読み取り系のツールだけを渡す')
+  .action(async (args: string[] | undefined, o) =>
+    run(() => runCommand(args ?? [], { ...globals(), ...o, noTools: o.tools === false })),
+  );
+
+program
+  .command('runs')
+  .description('過去の実行の一覧')
+  .option('--limit <n>', '表示件数。既定20')
+  .action(async (o) => run(() => runsCommand({ ...globals(), ...o })));
+
+program
+  .command('diff')
+  .description('実行が行ったファイル変更を差分で見る')
+  .option('--run <ID>', '対象の実行。既定は直近でファイルを変更したもの')
+  .option('--path <相対パス>', '1ファイルだけ')
+  .action(async (o) => run(() => diffCommand({ ...globals(), ...o })));
+
+program
+  .command('undo')
+  .description('実行が行ったファイル変更を元に戻す')
+  .option('--run <ID>', '対象の実行。既定は直近でファイルを変更したもの')
+  .option('-y, --yes', '確認しない')
+  .action(async (o) => run(() => undoCommand({ ...globals(), ...o })));
 
 program
   .command('models')
@@ -117,12 +154,12 @@ endpoints
   .description('対応機能を判定して保存する')
   .action(async (n) => run(() => endpointsProbe(n, globals())));
 
-// エージェント実行はまだ無い。あるように見せない。
-for (const [name, desc] of [
-  ['run', 'エージェント実行'],
-  ['diff', '直前の実行の差分'],
-  ['undo', '直前の実行を元に戻す'],
-  ['runs', '過去の実行の一覧'],
+// まだ無い機能。あるように見せない。
+for (const [name, desc, when] of [
+  ['serve', 'ハーネスAPI', 'P2'],
+  ['mcp', 'MCP の登録と公開', 'P3'],
+  ['index', 'ベクトル索引', 'P4'],
+  ['web', 'Web検索と取得', 'P5'],
 ] as const) {
   program
     .command(name, { hidden: true })
@@ -130,9 +167,7 @@ for (const [name, desc] of [
     .allowUnknownOption()
     .action(() => {
       errorLine(`${name} はまだ実装されていません。`);
-      hintLine(
-        'エージェント実行は docs/spec/11-roadmap.md の P3 で入ります。今使えるのは chat / models / doctor / config です。',
-      );
+      hintLine(`${desc}は docs/spec/11-roadmap.md の ${when} で入ります。`);
       process.exitCode = EXIT.usage;
     });
 }
@@ -172,17 +207,25 @@ async function run(fn: () => Promise<void>): Promise<void> {
     }
     errorLine(messageOf(err));
     // スタックにも鍵が混ざりうるので、伏字化を通してから出す。
-    if (process.env.AKARI_DEBUG) process.stderr.write(redact(String((err as Error)?.stack ?? '')) + '\n');
+    if (process.env.AKARI_DEBUG)
+      process.stderr.write(redact(String((err as Error)?.stack ?? '')) + '\n');
     else hintLine('詳しい内容は AKARI_DEBUG=1 を付けて再実行すると出ます。');
     process.exitCode = EXIT.runtime;
   }
 }
 
 async function main(): Promise<void> {
-  const argv = process.argv;
+  let argv = process.argv;
   if (argv.includes('--no-color') || process.env.NO_COLOR) setColor(false);
 
   // 引数なしは、まだ何ができるかを示す。エージェント実行があるように見せない。
+  // サブコマンド名でない文字列が最初に来たら run とみなす（akari "テストを通して"）。
+  const known = new Set(program.commands.map((cmd) => cmd.name()));
+  const first = argv[2];
+  if (first !== undefined && !first.startsWith('-') && !known.has(first)) {
+    argv = [...argv.slice(0, 2), 'run', ...argv.slice(2)];
+  }
+
   if (argv.length <= 2) {
     out(c.bold(`Akari CLI ${VERSION}`));
     out('');

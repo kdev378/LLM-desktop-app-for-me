@@ -38,16 +38,20 @@ Akari は **1エージェント分の手足**。
 
 ## 現在の状態
 
-**CLI の接続部分まで動きます。** → [動かし方](docs/getting-started.md) / [仕様](docs/spec/README.md)
+**CLI からエージェントが動きます。** → [動かし方](docs/getting-started.md) / [仕様](docs/spec/README.md)
 
 ```sh
 pnpm install && pnpm build
 node apps/cli/dist/index.js config endpoints add --name "ローカル" --url http://localhost:11434/v1
-node apps/cli/dist/index.js chat
+node apps/cli/dist/index.js run "READMEのtypoを直して"   # 承認を挟んでファイルを編集
+node apps/cli/dist/index.js diff                        # 何を変えたか
+node apps/cli/dist/index.js undo                        # 元に戻す
 ```
 
-エージェント実行・ハーネスAPI・MCP・記憶・Web・デスクトップアプリはまだありません。
-実装順序は**エージェント先行**（`docs/spec/11-roadmap.md`）。
+作業フォルダの外は触れません。書き込みとコマンド実行は承認制で、実行単位で取り消せます。
+
+ハーネスAPI・MCP・記憶・Web・デスクトップアプリはまだありません
+（`docs/spec/11-roadmap.md` の P2 以降）。
 
 実装の順序と、各段階で何が確かめられるようになるかは
 [`docs/spec/11-roadmap.md`](docs/spec/11-roadmap.md) にある。
