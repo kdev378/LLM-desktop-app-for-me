@@ -171,3 +171,33 @@ test('listModels の失敗は ProviderError を持った例外になる', async 
     assert.equal(getProviderError(err)?.kind, 'unreachable');
   }
 });
+
+test('本文に混ざった <think> は思考として分けて流す', async () => {
+  const s = await startFakeServer({
+    kind: 'text',
+    chunks: ['<thi', 'nk>ここは', '思考</th', 'ink>答えは', '2です。'],
+  });
+  const events = await collect(createProvider(endpoint(s.url)).chat(req));
+  const text = events
+    .filter((e) => e.type === 'text-delta')
+    .map((e) => e.text)
+    .join('');
+  const reasoning = events
+    .filter((e) => e.type === 'reasoning-delta')
+    .map((e) => e.text)
+    .join('');
+  assert.equal(text, '答えは2です。');
+  assert.equal(reasoning, 'ここは思考');
+  await s.close();
+});
+
+test('思考タグが無い応答は、チャンクの区切りどおりに流れる', async () => {
+  // 思考の切り出しのために出力を溜め込んでいないことの確認
+  const s = await startFakeServer({ kind: 'text', chunks: ['一', '二', '三'] });
+  const events = await collect(createProvider(endpoint(s.url)).chat(req));
+  assert.deepEqual(
+    events.filter((e) => e.type === 'text-delta').map((e) => e.text),
+    ['一', '二', '三'],
+  );
+  await s.close();
+});

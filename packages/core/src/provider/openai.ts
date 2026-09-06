@@ -1,4 +1,5 @@
 import { SseParser, ToolCallBuffer } from './sse.js';
+import { ThinkSplitter } from './think.js';
 import {
   classifyHttp,
   classifyNetwork,
@@ -259,6 +260,8 @@ class OpenAiCompatibleProvider implements Provider {
 
     const parser = new SseParser();
     const tools = new ToolCallBuffer();
+    // 本文に混ざる <think> は、受け取った時点で思考として分けておく
+    const think = new ThinkSplitter();
     const decoder = new TextDecoder();
     let finishReason: FinishReason = 'unknown';
     let usage: Usage | undefined;
@@ -316,7 +319,9 @@ class OpenAiCompatibleProvider implements Provider {
             if (!sawAnyDelta) timer.reset(IDLE_TIMEOUT_MS, { akari: 'idle-timeout' });
             else timer.bump();
             sawAnyDelta = true;
-            yield { type: 'text-delta', text: delta.content };
+            const split = think.push(delta.content);
+            if (split.reasoning !== '') yield { type: 'reasoning-delta', text: split.reasoning };
+            if (split.text !== '') yield { type: 'text-delta', text: split.text };
           }
           const reasoning = delta.reasoning_content ?? delta.reasoning;
           if (typeof reasoning === 'string' && reasoning !== '') {
@@ -337,6 +342,16 @@ class OpenAiCompatibleProvider implements Provider {
     } finally {
       timer.clear();
       reader.releaseLock?.();
+    }
+
+    const tail = think.flush();
+    if (tail.reasoning !== '') yield { type: 'reasoning-delta', text: tail.reasoning };
+    if (tail.text !== '') yield { type: 'text-delta', text: tail.text };
+    if (think.unterminated) {
+      this.log?.warn('provider.unterminatedThinkBlock', {
+        endpointId: this.endpointId,
+        model: req.model,
+      });
     }
 
     for (const ev of parser.flush()) {
@@ -405,7 +420,15 @@ class OpenAiCompatibleProvider implements Provider {
     });
     const choice = payload.choices?.[0];
     const msg = choice?.message ?? choice?.delta;
-    if (msg?.content) yield { type: 'text-delta', text: msg.content };
+    if (msg?.content) {
+      const splitter = new ThinkSplitter();
+      const a = splitter.push(msg.content);
+      const b = splitter.flush();
+      const reasoning = a.reasoning + b.reasoning;
+      const body = a.text + b.text;
+      if (reasoning !== '') yield { type: 'reasoning-delta', text: reasoning };
+      if (body !== '') yield { type: 'text-delta', text: body };
+    }
     const reasoning = msg?.reasoning_content ?? msg?.reasoning;
     if (typeof reasoning === 'string' && reasoning)
       yield { type: 'reasoning-delta', text: reasoning };

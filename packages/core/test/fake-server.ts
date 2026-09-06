@@ -66,6 +66,9 @@ export async function startFakeServer(
     s.on('close', () => sockets.delete(s));
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+  // 閉じ忘れてもプロセスを止めない。止まると「テスト失敗」が「ハング」に化けて、
+  // 原因を追うのに時間がかかる。
+  server.unref();
   const port = (server.address() as AddressInfo).port;
 
   return {
