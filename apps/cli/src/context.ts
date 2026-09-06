@@ -1,4 +1,5 @@
 import {
+  isLikelyChatModel,
   loadConfig,
   saveConfig,
   createLogger,
@@ -77,13 +78,15 @@ export async function pickModel(
   if (chosen) return chosen;
 
   const models = await listModels();
-  const first = models[0];
+  // 一覧の先頭をそのまま使わない。LM Studio のように埋め込みモデルが混ざる環境で
+  // chat を投げられないモデルを掴むため（docs/spec/02-provider.md）。
+  const first = models.find((m) => isLikelyChatModel(m)) ?? models[0];
   if (!first) {
     throw new ExitError(EXIT.usage, `接続先 "${endpoint.name}" にモデルが1件もありません。`, {
       hint: 'サーバ側にモデルを入れるか、--model で明示してください。',
     });
   }
-  note(`モデル未指定のため ${first} を使います。`);
+  note(`モデル未指定のため ${first} を使います（-m で指定できます）。`);
   return first;
 }
 

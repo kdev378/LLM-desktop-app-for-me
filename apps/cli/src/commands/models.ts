@@ -21,6 +21,9 @@ export async function modelsCommand(opts: GlobalOptions): Promise<void> {
     );
   }
 
+  // 表示は名前順。選択に使う順序（サーバの順序）とは別（docs/spec/02-provider.md）。
+  const sorted = [...models].sort((a, b) => a.id.localeCompare(b.id));
+
   if (ctx.json) {
     out(JSON.stringify({ endpoint: endpoint.name, baseUrl: endpoint.baseUrl, models }));
     return;
@@ -33,12 +36,13 @@ export async function modelsCommand(opts: GlobalOptions): Promise<void> {
   out(c.dim(`${endpoint.name}  ${endpoint.baseUrl}`));
   out(
     table(
-      models.map((m) => [
+      sorted.map((m) => [
         m.id === endpoint.defaultModel ? c.green('*') : ' ',
         m.id,
+        m.contextTokens ? `${m.contextTokens.toLocaleString()}` : '',
         m.ownedBy ?? '',
       ]),
-      [' ', 'モデル', '提供'],
+      [' ', 'モデル', '文脈長', '提供'],
     ),
   );
   out(c.dim(`\n${models.length}件  * = この接続先の既定`));

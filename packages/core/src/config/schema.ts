@@ -26,6 +26,8 @@ export const modelCapabilitySchema = z.object({
   tools: z.enum(['native', 'prompted', 'none']),
   usageReported: z.boolean().default(false),
   streamsToolCalls: z.boolean().default(false),
+  /** そのモデルの文脈長。分からなければ null（docs/spec/16-context.md）。 */
+  contextTokens: z.number().int().min(256).nullable().default(null),
   probedAt: z.string(),
 });
 

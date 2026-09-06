@@ -64,6 +64,15 @@ export async function doctorCommand(opts: DoctorOptions): Promise<void> {
     out(`      URL:   ${ep.baseUrl}`);
     out(`      鍵:    ${ep.keySource}`);
     out(`      モデル: ${ep.defaultModel ?? c.dim('(未設定)')}`);
+    if (ep.models && ep.models.length > 0) {
+      out(`      判定済みのモデル:`);
+      for (const m of ep.models) {
+        const ctx = m.contextTokens
+          ? `${m.contextTokens.toLocaleString()} トークン`
+          : c.dim('文脈長 不明');
+        out(`        ${m.id}  ツール: ${m.tools}  ${ctx}`);
+      }
+    }
     if (ep.probe) {
       for (const n of ep.probe.notes) out(c.dim(`      - ${n}`));
       if (ep.probe.error) out(c.red(`      ! ${ep.probe.error.message}`));

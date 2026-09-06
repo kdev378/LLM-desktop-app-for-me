@@ -429,3 +429,66 @@ test('判定できない接続先では none を返し、実行させない', as
   assert.equal(r.mode, 'none');
   assert.equal(r.capabilities, undefined, '判定できなかった結果を保存しない');
 });
+
+// ---------------- モデルの自動選択 ----------------
+
+test('埋め込み専用のモデルをチャット用と見なさない', async () => {
+  const { isLikelyChatModel } = await import('../dist/index.js');
+  for (const id of [
+    'nomic-embed-text-v1.5',
+    'text-embedding-3-small',
+    'bge-m3',
+    'jina-reranker-v2',
+    'whisper-large-v3',
+    'kokoro-tts',
+  ]) {
+    assert.equal(isLikelyChatModel(id), false, `${id} はチャット用ではない`);
+  }
+  for (const id of ['qwen3.5-agents-a1-4b', 'gemma3n:e4b', 'llama3.1:8b', 'mock-coder-14b']) {
+    assert.equal(isLikelyChatModel(id), true, `${id} はチャット用`);
+  }
+});
+
+test('モデル未指定のとき、埋め込みモデルを飛ばして会話用を選ぶ', async () => {
+  const { pickChatModel } = await import('../dist/index.js');
+  // LM Studio のように埋め込みモデルが先頭に来る一覧
+  assert.equal(
+    pickChatModel([{ id: 'nomic-embed-text-v1.5' }, { id: 'qwen3.5-agents-a1-4b' }])?.id,
+    'qwen3.5-agents-a1-4b',
+  );
+  // 会話用が無ければ、無理に除外せず先頭を返す（何も選ばないより良い）
+  assert.equal(pickChatModel([{ id: 'nomic-embed-text-v1.5' }])?.id, 'nomic-embed-text-v1.5');
+  assert.equal(pickChatModel([]), null);
+});
+
+test('判定の記録に、どのモデルを使ったかが必ず入る', async () => {
+  const provider = {
+    endpointId: 'ep',
+    async listModels() {
+      return [{ id: 'embed-only' }, { id: 'chat-model' }];
+    },
+    async probe(model?: string) {
+      // 実装と同じ選び方をここでは真似しない。probeEndpoint の責務を直接見る
+      return {
+        reachable: true,
+        models: [],
+        tools: 'native' as const,
+        contextTokens: null,
+        usageReported: false,
+        streamsToolCalls: true,
+        testedModel: model ?? 'chat-model',
+        notes: [],
+      };
+    },
+    async *chat() {
+      /* 使わない */
+    },
+  } as never;
+  const { probeEndpoint } = await import('../dist/index.js');
+  const r = await probeEndpoint(provider, 'ep');
+  assert.equal(r.testedModel, 'chat-model', '埋め込みモデルを選ばない');
+  assert.ok(
+    r.notes.some((n) => n.includes('判定に使ったモデル')),
+    'どのモデルで判定したかを必ず出す',
+  );
+});

@@ -51,8 +51,15 @@ reasoning だけを圧縮しても、ファイルを数回読めば同じ状況�
 | `context.mode` | `auto` | `auto` / `off`。`off` なら圧縮せず、入りきらなければ止める |
 
 `windowTokens` は接続先ではなく**モデルごと**に持つ（`capabilities.byModel[model].contextTokens`）。
-`/models` が文脈長を返すサーバは少ないので、原則は利用者が設定する。
-分からないものを分かったふりにしない。
+
+取得の順序:
+
+1. `/models` がフィールドで返していれば、それを使う（`02-provider.md`）。
+   vLLM は `max_model_len` を返す。
+2. 返さないサーバでは、利用者が設定する。
+   `akari config endpoints probe -m <モデル> --context <数値>`
+3. どちらも無ければ**不明**として扱い、`compactAtTokens` の絶対値で判断する。
+   分からないものを分かったふりにしない。
 
 ### トークン数の見積り
 

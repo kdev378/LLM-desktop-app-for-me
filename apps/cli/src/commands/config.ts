@@ -176,7 +176,7 @@ export async function endpointsUse(nameOrId: string, opts: GlobalOptions): Promi
 
 export async function endpointsProbe(
   nameOrId: string | undefined,
-  opts: GlobalOptions,
+  opts: GlobalOptions & { context?: string },
 ): Promise<void> {
   const ctx = await createContext(opts);
   const target = findEndpoint(ctx.config, nameOrId ?? null);
@@ -184,6 +184,19 @@ export async function endpointsProbe(
 
   const resolved = await resolveEndpoint(ctx.config, target.id, ctx.root);
   const model = opts.model ?? process.env.AKARI_MODEL ?? target.defaultModel ?? undefined;
+  let manualContext: number | null = null;
+  if (opts.context !== undefined) {
+    const n = Number(opts.context);
+    if (!Number.isInteger(n) || n < 256) {
+      throw new ExitError(EXIT.usage, '--context は 256 以上の整数で指定してください。');
+    }
+    if (!model) {
+      throw new ExitError(EXIT.usage, '--context を使うときは -m でモデルを指定してください。', {
+        hint: '文脈長はモデルごとの値です。',
+      });
+    }
+    manualContext = n;
+  }
   out(c.dim(`${target.name}${model ? ` / ${model}` : ''} を判定しています…`));
   const result = await createProvider(resolved, { logger: ctx.logger }).probe(model);
 
@@ -217,6 +230,7 @@ export async function endpointsProbe(
                   tools: result.tools,
                   usageReported: result.usageReported,
                   streamsToolCalls: result.streamsToolCalls,
+                  contextTokens: manualContext ?? result.contextTokens,
                   probedAt,
                 },
               }
@@ -226,6 +240,13 @@ export async function endpointsProbe(
     }),
   );
   out('');
+  if (manualContext !== null) {
+    out(
+      c.dim(
+        `文脈長を ${manualContext.toLocaleString()} トークンとして保存しました（手で指定した値）。`,
+      ),
+    );
+  }
   out(c.dim('判定結果を設定へ保存しました。'));
 }
 

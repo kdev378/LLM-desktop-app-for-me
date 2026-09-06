@@ -121,10 +121,13 @@ class OpenAiCompatibleProvider implements Provider {
           id,
           ownedBy: typeof rec.owned_by === 'string' ? rec.owned_by : undefined,
           created: typeof rec.created === 'number' ? rec.created : undefined,
+          ...(readContextTokens(rec) !== null ? { contextTokens: readContextTokens(rec)! } : {}),
         };
       })
-      .filter((m): m is ModelInfo => m !== null)
-      .sort((a, b) => a.id.localeCompare(b.id));
+      .filter((m): m is ModelInfo => m !== null);
+    // 並べ替えない。サーバの順序には意味があることが多く
+    // （読み込み中のモデルが先頭など）、並べ替えると自動選択が的外れになる。
+    // 表示のための並べ替えは呼び出し側で行う。
   }
 
   async *chat(req: ChatRequest, signal?: AbortSignal): AsyncGenerator<ChatEvent, void, void> {
@@ -521,6 +524,25 @@ export function buildRequestBody(req: ChatRequest, includeUsage: boolean): Recor
   if (req.stop && req.stop.length > 0) body.stop = req.stop;
   if (req.seed !== undefined) body.seed = req.seed;
   return body;
+}
+
+/**
+ * サーバが文脈長を返していれば拾う。名前はサーバごとに違う。
+ * vLLM は max_model_len、llama.cpp 系は n_ctx、LM Studio は max_context_length を使うことがある。
+ * どれも無ければ null。推測しない。
+ */
+function readContextTokens(rec: Record<string, unknown>): number | null {
+  for (const key of [
+    'max_model_len',
+    'max_context_length',
+    'context_length',
+    'n_ctx',
+    'context_window',
+  ]) {
+    const v = rec[key];
+    if (typeof v === 'number' && Number.isFinite(v) && v > 0) return Math.floor(v);
+  }
+  return null;
 }
 
 function normalizeFinish(reason: string): FinishReason {

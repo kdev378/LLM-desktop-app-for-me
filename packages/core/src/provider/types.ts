@@ -58,6 +58,11 @@ export type ModelInfo = {
   id: string;
   ownedBy?: string;
   created?: number;
+  /**
+   * サーバが文脈長を返した場合のみ入る。返さないサーバが多いので、
+   * 無いことを「分かっている」ように扱わない（docs/spec/16-context.md）。
+   */
+  contextTokens?: number;
 };
 
 export type ProviderErrorKind =
@@ -85,6 +90,8 @@ export type ProviderError = {
 export type EndpointProbeResult = {
   reachable: boolean;
   models: ModelInfo[];
+  /** 判定に使ったモデルの文脈長。分からなければ null。 */
+  contextTokens: number | null;
   tools: 'native' | 'prompted' | 'none';
   usageReported: boolean;
   streamsToolCalls: boolean;

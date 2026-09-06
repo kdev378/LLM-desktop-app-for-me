@@ -10,7 +10,15 @@
 import http from 'node:http';
 
 const port = Number(process.argv[2] ?? 11499);
-const MODELS = ['mock-chat-7b', 'mock-coder-14b', 'mock-notools-4b'];
+// AKARI_MOCK_MODELS でモデル一覧を差し替えられる（LM Studio のように
+// 埋め込みモデルが混ざる状況を再現するため）。
+const MODELS = (process.env.AKARI_MOCK_MODELS ?? 'mock-chat-7b,mock-coder-14b,mock-notools-4b')
+  .split(',')
+  .map((m) => m.trim())
+  .filter(Boolean);
+
+// 埋め込み専用モデルは chat を受け付けない。実物と同じように 400 を返す。
+const isEmbeddingOnly = (id) => /embed|rerank|whisper|tts|bge-|clip/i.test(id);
 
 // エージェントの動作確認用の台本。
 // 「その会話で何ターン目か」で引く。呼び出し回数で数えると、
@@ -33,28 +41,50 @@ const server = http.createServer((req, res) => {
   req.on('data', (c) => body.push(c));
   req.on('end', () => {
     const url = req.url ?? '';
+    const rawBody = Buffer.concat(body).toString('utf8');
+    let payload0 = {};
+    try {
+      payload0 = JSON.parse(rawBody || '{}');
+    } catch {
+      payload0 = {};
+    }
     if (url.endsWith('/models')) {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(
         JSON.stringify({
           object: 'list',
-          data: MODELS.map((id) => ({ id, object: 'model', owned_by: 'mock' })),
+          data: MODELS.map((id) => ({
+            id,
+            object: 'model',
+            owned_by: 'mock',
+            // AKARI_MOCK_CONTEXT を設定すると、vLLM のように文脈長を申告する
+            ...(process.env.AKARI_MOCK_CONTEXT
+              ? { max_model_len: Number(process.env.AKARI_MOCK_CONTEXT) }
+              : {}),
+          })),
         }),
       );
       return;
     }
+    if (isEmbeddingOnly(String(payload0.model ?? '')) && url.includes('/chat/completions')) {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          error: {
+            message: `Model ${payload0.model} is an embedding model and does not support chat completions.`,
+          },
+        }),
+      );
+      return;
+    }
+
     if (!url.includes('/chat/completions')) {
       res.writeHead(404, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: { message: 'not found' } }));
       return;
     }
 
-    let payload = {};
-    try {
-      payload = JSON.parse(Buffer.concat(body).toString('utf8'));
-    } catch {
-      /* 下で扱う */
-    }
+    const payload = payload0;
     const last = [...(payload.messages ?? [])].reverse().find((m) => m.role === 'user');
     // AKARI_MOCK_NO_TOOLS=1 で「ツールを理解しないモデル」を再現する。
     // Gemma 系のようにツール用テンプレートを持たないモデルの挙動にあたる。

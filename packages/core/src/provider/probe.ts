@@ -1,5 +1,11 @@
 import { getProviderError } from './openai.js';
-import type { EndpointProbeResult, Provider, ProviderError, ToolDefinition } from './types.js';
+import type {
+  EndpointProbeResult,
+  ModelInfo,
+  Provider,
+  ProviderError,
+  ToolDefinition,
+} from './types.js';
 
 /**
  * 接続先の実力を調べる。仕様: docs/spec/02-provider.md
@@ -7,6 +13,23 @@ import type { EndpointProbeResult, Provider, ProviderError, ToolDefinition } fro
  * 判定は「その時点のモデルに対する結果」であることを notes に必ず書く。
  * 判定できなかったものを、できたことにしない。
  */
+
+/** 埋め込み・再ランク・音声専用のモデル。chat を投げても失敗する。 */
+const NON_CHAT_PATTERN =
+  /(^|[-_./])(embed|embedding|rerank|reranker|whisper|tts|bge|clip|moderation)([-_./]|$)/i;
+
+export function isLikelyChatModel(id: string): boolean {
+  return !NON_CHAT_PATTERN.test(id);
+}
+
+/**
+ * モデル未指定のときに使うモデルを選ぶ。
+ * 一覧の先頭をそのまま使うと、LM Studio のように埋め込みモデルが混ざる環境で
+ * chat を投げられないモデルを掴む。会話に使えそうなものを先に選ぶ。
+ */
+export function pickChatModel(models: ModelInfo[]): ModelInfo | null {
+  return models.find((m) => isLikelyChatModel(m.id)) ?? models[0] ?? null;
+}
 
 const PROBE_TOOL: ToolDefinition = {
   name: 'akari_probe_number',
@@ -36,6 +59,7 @@ export async function probeEndpoint(
       reachable: false,
       models: [],
       tools: 'none',
+      contextTokens: null,
       usageReported: false,
       streamsToolCalls: false,
       testedModel: null,
@@ -45,18 +69,34 @@ export async function probeEndpoint(
   }
   notes.push(`/models: ${models.length}件`);
 
-  const testedModel = model ?? models[0]?.id ?? null;
+  const chosen = model
+    ? (models.find((m) => m.id === model) ?? { id: model })
+    : pickChatModel(models);
+  const testedModel = chosen?.id ?? null;
   if (!testedModel) {
     return {
       reachable: true,
       models,
       tools: 'none',
+      contextTokens: null,
       usageReported: false,
       streamsToolCalls: false,
       testedModel: null,
       notes: [...notes, 'モデルが1件も無いため、生成とツールの判定はできていません。'],
     };
   }
+  // どのモデルで判定したのかを、成功しても失敗しても必ず出す。
+  notes.push(
+    model
+      ? `判定に使ったモデル: ${testedModel}（指定）`
+      : `判定に使ったモデル: ${testedModel}（未指定のため自動で選択。-m で指定できます）`,
+  );
+  if (!isLikelyChatModel(testedModel)) {
+    notes.push(
+      `注意: ${testedModel} は埋め込み等の専用モデルに見えます。会話用のモデルを -m で指定してください。`,
+    );
+  }
+  const contextTokens = chosen && 'contextTokens' in chosen ? (chosen.contextTokens ?? null) : null;
 
   // 2. ツール呼び出しを1つだけ渡して、呼ばれるかを見る
   let sawToolCall = false;
@@ -107,6 +147,7 @@ export async function probeEndpoint(
   } else if (error) {
     tools = 'none';
     notes.push(`ツール判定: 生成でエラーが出たため判定できていません（${error.message}）`);
+    if (error.bodyExcerpt) notes.push(`サーバの応答: ${error.bodyExcerpt.slice(0, 300)}`);
   } else if (sawText) {
     tools = 'prompted';
     notes.push('ツール呼び出し: 呼ばれず本文だけが返りました。代替方式（prompted）になります。');
@@ -120,12 +161,18 @@ export async function probeEndpoint(
       ? 'トークン数: サーバが報告します'
       : 'トークン数: サーバが報告しないため概算になります',
   );
+  notes.push(
+    contextTokens !== null
+      ? `文脈長: ${contextTokens.toLocaleString()} トークン（サーバの申告）`
+      : '文脈長: サーバが返さないため不明。akari config endpoints probe -m <モデル> --context <数値> で設定できます',
+  );
   notes.push('この判定は上のモデルに対する結果です。別のモデルでは変わることがあります。');
 
   return {
     reachable: true,
     models,
     tools,
+    contextTokens,
     usageReported,
     streamsToolCalls: sawToolCall,
     testedModel,
@@ -164,6 +211,7 @@ export type ToolsModeResolution = {
       tools: 'native' | 'prompted' | 'none';
       usageReported: boolean;
       streamsToolCalls: boolean;
+      contextTokens: number | null;
       probedAt: string;
     };
   };
@@ -224,6 +272,7 @@ export async function resolveToolsMode(
         tools: result.tools,
         usageReported: result.usageReported,
         streamsToolCalls: result.streamsToolCalls,
+        contextTokens: result.contextTokens,
         probedAt,
       },
     },

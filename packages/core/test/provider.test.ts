@@ -35,14 +35,12 @@ async function collect(gen: AsyncIterable<unknown>) {
 
 const req = { model: 'test-model', messages: [{ role: 'user' as const, content: 'hi' }] };
 
-test('モデル一覧を取得して並べ替える', async () => {
+test('モデル一覧を取得できる', async () => {
   const s = await startFakeServer();
   s.setModels(['zeta', 'alpha']);
   const models = await createProvider(endpoint(s.url)).listModels();
-  assert.deepEqual(
-    models.map((m) => m.id),
-    ['alpha', 'zeta'],
-  );
+  assert.equal(models.length, 2);
+  assert.equal(models[0].ownedBy, 'fake');
   await s.close();
 });
 
@@ -198,6 +196,18 @@ test('思考タグが無い応答は、チャンクの区切りどおりに流�
   assert.deepEqual(
     events.filter((e) => e.type === 'text-delta').map((e) => e.text),
     ['一', '二', '三'],
+  );
+  await s.close();
+});
+
+test('モデル一覧はサーバの順序を保つ（並べ替えない）', async () => {
+  const s = await startFakeServer();
+  s.setModels(['zeta', 'alpha', 'mid']);
+  const models = await createProvider(endpoint(s.url)).listModels();
+  assert.deepEqual(
+    models.map((m) => m.id),
+    ['zeta', 'alpha', 'mid'],
+    'サーバの順序には意味がある（読み込み中のモデルが先頭など）ので並べ替えない',
   );
   await s.close();
 });

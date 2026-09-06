@@ -19,6 +19,8 @@ export type EndpointDiagnostic = {
   name: string;
   baseUrl: string;
   external: boolean;
+  /** 判定済みのモデルごとの状態。 */
+  models?: Array<{ id: string; tools: string; contextTokens: number | null }>;
   keySource: 'なし' | 'ファイル' | '環境変数' | '環境変数が未設定';
   defaultModel: string | null;
   capabilities: Record<string, unknown>;
@@ -74,6 +76,11 @@ export async function collectDiagnostics(opts: CollectOptions = {}): Promise<Dia
               : 'ファイル',
       defaultModel: ep.defaultModel,
       capabilities: { ...ep.capabilities },
+      models: Object.entries(ep.capabilities.byModel).map(([id, c]) => ({
+        id,
+        tools: c.tools,
+        contextTokens: c.contextTokens,
+      })),
     };
     if (opts.probe) {
       try {

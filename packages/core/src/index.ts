@@ -45,7 +45,13 @@ export {
   buildRequestBody,
   type ProviderOptions,
 } from './provider/openai.js';
-export { probeEndpoint, resolveToolsMode, type ToolsModeResolution } from './provider/probe.js';
+export {
+  probeEndpoint,
+  resolveToolsMode,
+  isLikelyChatModel,
+  pickChatModel,
+  type ToolsModeResolution,
+} from './provider/probe.js';
 export { SseParser, ToolCallBuffer } from './provider/sse.js';
 export { ThinkSplitter, type SplitResult } from './provider/think.js';
 export {
