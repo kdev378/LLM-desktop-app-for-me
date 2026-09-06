@@ -191,8 +191,8 @@ export async function endpointsProbe(
       throw new ExitError(EXIT.usage, '--context は 256 以上の整数で指定してください。');
     }
     if (!model) {
-      throw new ExitError(EXIT.usage, '--context を使うときは -m でモデルを指定してください。', {
-        hint: '文脈長はモデルごとの値です。',
+      throw new ExitError(EXIT.usage, '--context を使うには対象のモデルが必要です。', {
+        hint: '-m でモデルを指定するか、接続先に既定モデルを設定してください（文脈長はモデルごとの値です）。',
       });
     }
     manualContext = n;

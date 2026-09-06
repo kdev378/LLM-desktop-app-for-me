@@ -24,7 +24,7 @@
 - テスト: `pnpm test`（core 43件 + CLI 14件）
 - 型検査: `pnpm typecheck` / 整形: `pnpm format`（対象はコードのみ。文書は整形しない）
 - 模擬LLMサーバ: `node tools/mock-llm-server.mjs 11499`（本物が手元に無いとき）
-- 動作確認の手順: `docs/getting-started.md`
+- 動作確認の手順: `docs/getting-started.md` / コマンドと引数の一覧: `docs/commands.md`
 
 > デスクトップ（`pnpm dev`）と配布（`pnpm dist`）はまだ無い。P1 以降。
 
@@ -112,7 +112,7 @@
   - `@akari/cli`: `config endpoints add/list/rm/use/probe`、`config list/get/set`、
     `models`、`chat`、`doctor`、`run`、`diff`、`undo`、`runs`
   - `tools/mock-llm-server.mjs`: 開発用の模擬OpenAI互換サーバ
-- 検証済み: 自動テスト163件（core 136 / CLI 27）。模擬サーバに対する通し動作。
+- 検証済み: 自動テスト164件（core 136 / CLI 28）。模擬サーバに対する通し動作。
   特にパス境界18件、ツール18件、実行ループと取り消し21件、代替方式16件を重点的に。
 - 実機確認用: `bash tools/verify-local-llm.sh <ベースURL> [モデル...]` で複数モデルを
   比較し、貼れる報告が1ファイルに出る

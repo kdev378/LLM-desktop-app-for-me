@@ -544,3 +544,19 @@ test('--help と --version は終了コード0', async () => {
   assert.equal((await akari(['--version'])).code, 0);
   assert.equal((await akari(['run', '--help'])).code, 0);
 });
+
+test('-p - で標準入力からプロンプトを読む', async () => {
+  const dir = await sandbox({});
+  await withScriptedServer(11810, [{ text: '受け取りました' }], async (ep) => {
+    const chat = await akari(['-e', ep, 'chat', '-p', '-', '-q'], '標準入力の文\n');
+    assert.equal(chat.code, 0);
+    assert.match(chat.stdout, /受け取りました/);
+
+    const run = await akari(
+      ['-e', ep, 'run', '-p', '-', '--no-tools', '-C', dir],
+      '標準入力の指示\n',
+    );
+    assert.equal(run.code, 0);
+    assert.match(run.stdout, /受け取りました/);
+  });
+});

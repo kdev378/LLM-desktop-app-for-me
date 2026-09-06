@@ -48,7 +48,9 @@ export async function runCommand(promptArgs: string[], opts: RunOptions): Promis
     });
   }
 
-  const prompt = (opts.prompt ?? promptArgs.join(' ')).trim() || (await readStdin());
+  // -p - は「標準入力から読む」（docs/spec/10-cli.md）
+  const fromArgs = opts.prompt === '-' ? '' : (opts.prompt ?? promptArgs.join(' ')).trim();
+  const prompt = fromArgs || (await readStdin());
   if (!prompt) {
     throw new ExitError(EXIT.usage, '何をするかを渡してください。', {
       hint: 'akari run "テストを通して"  /  akari run -p - で標準入力から',

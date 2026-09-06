@@ -150,6 +150,9 @@ akari config endpoints probe -m qwen3.5-agents-a1-4b
 
 ## いま使えるコマンド
 
+引数まで含めた完全な一覧は **[docs/commands.md](commands.md)**。ここでは概要だけ。
+
+
 | コマンド | 何をするか |
 |---|---|
 | `config endpoints add/list/rm/use/probe` | 接続先の登録・切替・機能判定 |

@@ -152,7 +152,10 @@ endpoints
 endpoints
   .command('probe [名前|ID]')
   .description('対応機能を判定して保存する')
-  .option('--context <トークン数>', 'そのモデルの文脈長を手で設定する（-m と併用）')
+  .option(
+    '--context <トークン数>',
+    'そのモデルの文脈長を手で設定する（対象モデルが決まっていること）',
+  )
   .action(async (n, o) => run(() => endpointsProbe(n, { ...globals(), ...o })));
 
 // まだ無い機能。あるように見せない。

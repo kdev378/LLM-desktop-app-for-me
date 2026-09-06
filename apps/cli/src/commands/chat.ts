@@ -38,7 +38,9 @@ export async function chatCommand(opts: ChatOptions): Promise<void> {
   if (opts.system) messages.push({ role: 'system', content: opts.system });
 
   const params = { temperature, maxTokens };
-  const oneShot = opts.prompt ?? (await readStdinIfPiped());
+  // -p - は「標準入力から読む」（docs/spec/10-cli.md）
+  const explicit = opts.prompt === '-' ? null : (opts.prompt ?? null);
+  const oneShot = explicit ?? (await readStdinIfPiped());
 
   if (oneShot !== null && oneShot !== undefined) {
     messages.push({ role: 'user', content: oneShot });

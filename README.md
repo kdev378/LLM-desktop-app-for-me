@@ -38,7 +38,7 @@ Akari は **1エージェント分の手足**。
 
 ## 現在の状態
 
-**CLI からエージェントが動きます。** → [動かし方](docs/getting-started.md) / [仕様](docs/spec/README.md)
+**CLI からエージェントが動きます。** → [動かし方](docs/getting-started.md) / [コマンド一覧](docs/commands.md) / [仕様](docs/spec/README.md)
 
 ```sh
 pnpm install && pnpm build
@@ -61,6 +61,7 @@ node apps/cli/dist/index.js undo                        # 元に戻す
 ```
 docs/spec/          製品の仕様（16文書）
 docs/getting-started.md  動かし方
+docs/commands.md         コマンドと引数の一覧
 packages/core/      中核（設定・API接続・診断）
 apps/cli/           CLI
 tools/              模擬LLMサーバ（開発用）
