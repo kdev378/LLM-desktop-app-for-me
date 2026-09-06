@@ -216,3 +216,28 @@ test('拒否リストは空白の違いを吸収する', () => {
   assert.equal(matchesDenied('rm  -rf  /', ['rm -rf /']), 'rm -rf /');
   assert.equal(matchesDenied('rm -rf ./build', ['rm -rf /']), null);
 });
+
+test('既定の拒否リストが git の履歴書き換えを塞ぐ', async () => {
+  const { defaultConfig } = await import('../dist/index.js');
+  const denied = defaultConfig().agent.deniedCommands;
+  for (const cmd of [
+    'git push --force origin main',
+    'git push -f',
+    'git reset --hard HEAD~3',
+    'git commit --amend -m "x"',
+    'git rebase -i main',
+    'git filter-branch --all',
+    'sudo rm -rf / --no-preserve-root',
+  ]) {
+    assert.notEqual(matchesDenied(cmd, denied), null, `${cmd} は拒否されるはず`);
+  }
+  // 普通の git 操作は塞がない
+  for (const cmd of [
+    'git status',
+    'git commit -m "fix"',
+    'git push origin feature/x',
+    'git merge main',
+  ]) {
+    assert.equal(matchesDenied(cmd, denied), null, `${cmd} は通るはず`);
+  }
+});

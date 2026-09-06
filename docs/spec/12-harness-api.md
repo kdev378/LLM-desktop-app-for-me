@@ -174,6 +174,28 @@ Akari は `commit` も `merge` も `push` も**自分からはしない**。
 コミットしたければ、エージェントが `run_command` の承認を通して行う。
 merge は外部ツールの権限を持つエージェントの仕事（非目標）。
 
+### 統合役のエージェントに git だけを渡す
+
+権限を持つ統合役を Akari で動かす場合、`run_command` を渡すと何でも実行できてしまう。
+`05-agent.md` の git ツール群を**設定で有効にした上で**、実行の `tools` を
+読み取り系 + git ツールだけに絞る。
+
+```jsonc
+{
+  "prompt": "feature/x を main へ取り込んで",
+  "workspace": "/repos/app",
+  "tools": ["read_file", "glob", "grep", "git_status", "git_diff", "git_merge", "git_commit"],
+  "permissionMode": "full",
+  "labels": { "agent": "統合役" }
+}
+```
+
+- 設定の `agent.gitTools.enabled` が false なら、この要求は `400 git_tools_disabled` で拒否する。
+  **API から権限を広げることはできない。**
+- `git_push` は `allowPush` と `allowedRemotes` / `allowedBranches` も要る。
+- 実行結果に `gitActions`（操作前後の HEAD）が入る。外部ツールはこれで
+  何が起きたかを追える。
+
 ## ログ
 
 - すべてのリクエストを `server.request` として記録する（メソッド、パス、状態、所要時間、runId）。

@@ -182,6 +182,110 @@ type FileChange = {
 | コマンド実行時間 | 120秒 | プロセスグループを kill し、それまでの出力を残す |
 | 同一ツール・同一引数の連続呼び出し | 3回 | ループとみなして停止し、理由を表示 |
 
+## 任意のツール群: git 書き込み（既定で無効）
+
+`00-overview.md` のとおり、**merge の判断は Akari の仕事ではない**。
+ただし外部のマルチエージェントツールには「権限を持つ統合役のエージェント」が居て、
+その手足として Akari を使う構成がありうる。そのための任意のツール群を定義する。
+
+**Akari の外側（設定ファイル）から有効にされたときだけ使える。**
+標準のツール一式には入らない。モデルが自分で有効にすることはできない。
+
+### なぜ `run_command` で済ませないのか
+
+`git commit` は `run_command` でも実行できる。それでも別に用意する理由は、
+**`run_command` より狭い権限**を渡せるようにするため。
+
+統合役のエージェントに必要なのは git 操作だけで、任意のコマンド実行ではない。
+`run_command` を渡すと、`rm` も `curl` も何でも実行できてしまう。
+git ツール群だけを渡せば、できることを git に限定できる。
+
+> 統合役の推奨構成: 読み取りツール + git ツール群。**`run_command` は渡さない。**
+
+### ツール
+
+| 名前 | 引数 | 危険度 | 備考 |
+|---|---|---|---|
+| `git_status` | — | read | ブランチ、変更ファイル、追跡状態 |
+| `git_diff` | `ref?`, `path?` | read | 既定は作業ツリー vs HEAD |
+| `git_log` | `limit?`, `ref?` | read | |
+| `git_commit` | `message`, `paths?` | write | `paths` 省略で追跡済みの変更すべて。`--amend` は不可 |
+| `git_branch` | `name`, `from?` | write | 作成と切替のみ。削除は不可 |
+| `git_merge` | `ref`, `abort?` | write | 競合したら中断せず、競合ファイルを報告する |
+| `git_push` | `remote?`, `branch?` | execute | **外部送信**。別の許可が要る（下記） |
+
+対象は作業フォルダのリポジトリ（worktree を切っていればその worktree）に限る。
+`--git-dir` や `-C` にあたる引数は受け付けない。
+
+### 設定でしか有効にならない
+
+```jsonc
+"agent": {
+  "gitTools": {
+    "enabled": false,        // 既定。false ならツール一覧に出さない
+    "allowPush": false,      // push は別の許可。enabled だけでは push できない
+    "allowedRemotes": [],    // push を許すリモート名。空なら push 不可
+    "allowedBranches": []    // push を許すブランチのパターン。空なら push 不可
+  }
+}
+```
+
+- ハーネスAPI（`12-harness-api.md`）の実行作成で `tools` に git ツールを並べても、
+  **設定が許していなければ拒否する**。API の呼び出し側は範囲を狭められるだけで、
+  広げることはできない。
+- `enabled: true` にした時点が「同意」にあたる。有効化のときに、
+  何ができるようになるかを一覧で示す。
+
+### どの設定でも許さないもの
+
+履歴を書き換える操作と、後始末が効かない操作は、`gitTools` を有効にしても通さない。
+
+- `--amend`、rebase、`reset --hard`、`filter-branch`、`push --force`（`--force-with-lease` も）
+- ブランチ・タグの削除
+- リモートの追加・変更・削除
+- `git config` の書き込み
+- サブモジュールの操作
+
+これらは `deniedCommands` の既定にも入れておく。ツール経由でも `run_command` 経由でも塞ぐ。
+
+### 競合の扱い
+
+`git_merge` が競合したら:
+
+- 作業ツリーは**競合したまま残す**。勝手に `--abort` しない。
+  エージェントが解決できる余地を残すため。
+- 競合したファイルの一覧を返し、競合中であることを明示する。
+- `git_merge` に `abort: true` を渡すと、merge 前の状態へ戻す。
+- 競合中は `git_commit` を拒否する（未解決のまま commit させない）。
+
+### 記録と取り消し
+
+git 操作は変更記録（`ChangeJournal`）に**ファイル変更としては入らない**。
+代わりに、実行ごとに次を記録する。
+
+```ts
+type GitAction = {
+  callId: string;
+  op: 'commit' | 'branch' | 'merge' | 'push';
+  /** 操作前後の HEAD。ここから git で戻せる。 */
+  beforeHead: string;
+  afterHead: string;
+  branch: string;
+  remote?: string;
+  at: string;
+};
+```
+
+**`akari undo` は git 操作を戻さない。** ファイルの取り消しと git の取り消しは
+別物で、まとめて扱うと危ない。実行の終わりに、git 操作があった場合はこう出す:
+
+```
+この実行は git 操作を行いました（commit 2件、push 1件）。
+取り消しには git を使ってください: git reset --hard 3f2a1b0  ← 実行前の HEAD
+```
+
+戻し方を出すだけで、Akari は実行しない。
+
 ## 作業の隔離（git worktree）
 
 複数のエージェントが同じリポジトリを同時に触ると、互いの変更を踏む。

@@ -69,6 +69,10 @@ export const agentSchema = z.object({
   commandTimeoutMs: z.number().int().min(1000).max(1800000).default(120000),
   toolOutputLimitBytes: z.number().int().min(1000).max(10000000).default(100000),
   allowedCommands: z.array(z.string()).default([]),
+  /**
+   * 一致したら承認画面すら出さずに拒否する。docs/spec/05-agent.md
+   * git の履歴を書き換える操作は、gitTools を有効にしても通さない。
+   */
   deniedCommands: z
     .array(z.string())
     .default([
@@ -79,7 +83,11 @@ export const agentSchema = z.object({
       'reboot',
       ':(){',
       'git push --force',
+      'git push -f',
       'git reset --hard',
+      'git commit --amend',
+      'git rebase',
+      'git filter-branch',
     ]),
 });
 

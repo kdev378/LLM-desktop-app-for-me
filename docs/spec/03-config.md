@@ -50,7 +50,11 @@
     "commandTimeoutMs": 120000,
     "toolOutputLimitBytes": 100000,
     "allowedCommands": [],
-    "deniedCommands": ["rm -rf /", "mkfs", "dd if=", "shutdown", "reboot", ":(){"]
+    "deniedCommands": [
+      "rm -rf /", "mkfs", "dd if=", "shutdown", "reboot", ":(){",
+      "git push --force", "git push -f", "git reset --hard",
+      "git commit --amend", "git rebase", "git filter-branch"
+    ]
   },
   "ui": { "theme": "system", "style": "modern", "density": "comfortable", "fontScale": 1.0 },
   "logging": { "level": "info", "retainDays": 14 },
@@ -72,7 +76,11 @@
 | `agent.maxSteps` | 1〜200 | 25 | 実行 | 上限に達したら停止し、理由を表示 |
 | `agent.commandTimeoutMs` | 1000〜1800000 | 120000 | ツール実行 | 超えたらプロセスグループごと終了 |
 | `agent.toolOutputLimitBytes` | 1000〜10000000 | 100000 | ツール実行 | 超過分は中央を省略し、省略した旨を明記 |
-| `agent.deniedCommands` | 文字列配列（部分一致） | 上記 | ツール実行 | 一致したら承認画面すら出さずに拒否 |
+| `agent.deniedCommands` | 文字列配列（部分一致） | 下記 | ツール実行 | 一致したら承認画面すら出さずに拒否 |
+| `agent.gitTools.enabled` | 真偽 | `false` | 全体 | git 書き込みツール群（`05-agent.md`）。設定でしか有効にならない |
+| `agent.gitTools.allowPush` | 真偽 | `false` | git | `enabled` だけでは push できない。別の許可 |
+| `agent.gitTools.allowedRemotes` | 文字列配列 | `[]` | git | push を許すリモート名。空なら push 不可 |
+| `agent.gitTools.allowedBranches` | 文字列配列 | `[]` | git | push を許すブランチのパターン。空なら push 不可 |
 | `ui.theme` | `light` / `dark` / `system` | `system` | 画面 | — |
 | `ui.style` | `modern` / `classic` | `modern` | 画面 | 見た目の系統（`08-ui.md`） |
 | `ui.density` | `comfortable` / `compact` | `comfortable` | 画面 | 行間と余白 |

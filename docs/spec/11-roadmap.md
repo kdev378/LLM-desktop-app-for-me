@@ -165,6 +165,24 @@ curl -N -H "Authorization: Bearer $TOKEN" localhost:7801/v1/runs/$ID/events
 
 ---
 
+### 任意: git 書き込みツール群
+
+`05-agent.md`。**P3 の完了条件には含めない。** 統合役のエージェントを
+実際に動かす段になってから作る。
+
+- `git_status` / `git_diff` / `git_log` / `git_commit` / `git_branch` / `git_merge` / `git_push`
+- 設定でしか有効にならない。API からは範囲を狭められるだけ
+- 履歴の書き換えとブランチ削除は、どの設定でも通さない
+- `akari undo` では戻さない。戻し方（実行前の HEAD）を提示するに留める
+
+検証すること:
+- [ ] `gitTools.enabled` が false のとき、ツール一覧にも出ず、API からも有効にできない
+- [ ] `allowPush` なしで `git_push` が通らない
+- [ ] `--amend` / `reset --hard` / force push が、どの設定でも通らない
+- [ ] merge が競合したとき、勝手に abort せず、競合ファイルを報告する
+- [ ] 競合中に `git_commit` が拒否される
+- [ ] 実行後に、git 操作があったことと戻し方（実行前の HEAD）が出る
+
 ## P4 — MCP（使う側 / なる側）
 
 `13-mcp.md`。**実装前に MCP の最新仕様を一次資料で確認する。**
