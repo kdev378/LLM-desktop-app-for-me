@@ -113,6 +113,19 @@ akari web fetch https://example.com/docs
 akari web doctor
 ```
 
+### `akari recall` / `akari digest`
+圧縮された会話の、生の記録を引く（`16-context.md`）。
+
+```sh
+akari recall "認証まわりで何を決めたか"        # 直近の会話を検索
+akari recall --conversation <id> "タイムアウト"
+akari recall --read <messageId>                # 原文を読む
+akari digest                                   # いま文脈に載っている圧縮版を見る
+akari digest --json
+```
+
+`digest` は、モデルが何を前提に動いているかを利用者が読める形で出す。
+
 ### `akari doctor`
 接続先ごとの到達性、`/models` の結果、機能判定、設定の要約、データの件数を出す。
 `--export <path>` で診断ファイルを書き出す（`09-security.md` の内容）。

@@ -42,9 +42,10 @@ type Conversation = {
   id: string;
   title: string;              // 自動生成 or 手動
   projectId: string | null;
-  messages: Record<string, Message>;   // id -> Message
+  messages: Record<string, Message>;   // id -> Message。圧縮しても消さない
   activeLeafId: string | null;         // 現在の末端。ここから親を辿ったものが表示される
   settings: ConversationSettings;      // endpoint/model/params/systemPrompt の上書き
+  compactions: Compaction[];           // 文脈の圧縮の記録（16-context.md）
   createdAt: string; updatedAt: string;
 };
 ```
@@ -96,6 +97,8 @@ type Conversation = {
   **推定値を実測値と同じ見た目で出さない**（数値の横に `~` を付け、ツールチップで根拠を書く）。
 - 文脈長を超えそうなときの警告は、モデルの文脈長が分かる場合のみ出す。
   分からないなら出さない（分からないことを警告に見せない）。
+- 文脈が閾値を超えたときの扱いは `16-context.md`。古いターンを構造化して圧縮し、
+  生の記録は残す。**黙って古いメッセージを落とすことはしない。**
 
 ## 検索
 

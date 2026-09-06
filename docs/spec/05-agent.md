@@ -24,6 +24,9 @@ type SessionOptions = {
 2. 応答に tool_calls が無ければ → 完了
 3. あれば、各呼び出しを検査 → 必要なら承認を待つ → 実行 → 結果をメッセージへ追加
 4. ステップ数が maxSteps に達したら停止（理由を明示）。そうでなければ 1 へ
+
+1 の前に、文脈が閾値を超えていないかを見る。超えていれば古いターンを圧縮する
+（`16-context.md`）。生の記録は消さない。
 ```
 
 ## イベント
@@ -43,6 +46,8 @@ type RunEvent =
   | { type: "tool-output"; callId: string; stream: "stdout" | "stderr"; text: string }  // 逐次
   | { type: "tool-result"; callId: string; ok: boolean; summary: string; change?: FileChange }
   | { type: "step-end"; step: number; usage?: Usage }
+  | { type: "compaction-start"; turns: number; beforeTokens: number; estimated: boolean }
+  | { type: "compaction-end"; compactionId: string; afterTokens: number; fallback?: string }
   | { type: "run-end"; reason: "done" | "aborted" | "max-steps" | "error" | "denied"; error?: unknown }
 ```
 
@@ -66,12 +71,15 @@ type RunEvent =
 | `web_search` | `query`, `count?` | read | `web.consent` に従う（`15-web.md`） |
 | `web_fetch` | `url`, `maxBytes?` | execute | 常に必要 |
 | `mcp__<サーバ>__<ツール>` | サーバの定義による | 既定 execute | `13-mcp.md` |
+| `recall_search` | `query`, `k?`, `role?` | read | 不要（`16-context.md`） |
+| `recall_read` | `messageId` | read | 不要（`16-context.md`） |
 
 有効になる条件:
 
 - `memory_search` … `memory.enabled` かつ索引がある。無ければ**ツール一覧に出さない**。
 - `web_search` / `web_fetch` … `web.enabled`。無ければ出さない。
 - `mcp__*` … そのMCPサーバが有効で、接続に成功したときだけ。
+- `recall_*` … その会話で圧縮が起きたときだけ。起きていなければ出さない。
 
 「あるけれど必ず失敗する」ツールを渡さない。モデルが無駄に試行し、
 利用者からは壊れて見えるため。

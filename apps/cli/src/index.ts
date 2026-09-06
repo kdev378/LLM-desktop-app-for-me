@@ -50,7 +50,7 @@ program
   akari undo                          直前の実行を元に戻す
   echo "要約して" | akari chat         標準入力から
 
-まだ実装されていないもの: serve / mcp / index / web（docs/spec/11-roadmap.md の P2〜P5）
+まだ実装されていないもの: recall / digest / serve / mcp / index / web（docs/spec/11-roadmap.md の P2〜P6）
 `,
   );
 
@@ -156,10 +156,12 @@ endpoints
 
 // まだ無い機能。あるように見せない。
 for (const [name, desc, when] of [
-  ['serve', 'ハーネスAPI', 'P2'],
-  ['mcp', 'MCP の登録と公開', 'P3'],
-  ['index', 'ベクトル索引', 'P4'],
-  ['web', 'Web検索と取得', 'P5'],
+  ['recall', '生の記録の検索', 'P2'],
+  ['digest', '文脈の圧縮版の表示', 'P2'],
+  ['serve', 'ハーネスAPI', 'P3'],
+  ['mcp', 'MCP の登録と公開', 'P4'],
+  ['index', 'ベクトル索引', 'P5'],
+  ['web', 'Web検索と取得', 'P6'],
 ] as const) {
   program
     .command(name, { hidden: true })
@@ -167,7 +169,7 @@ for (const [name, desc, when] of [
     .allowUnknownOption()
     .action(() => {
       errorLine(`${name} はまだ実装されていません。`);
-      hintLine(`${desc}は docs/spec/11-roadmap.md の ${when} で入ります。`);
+      hintLine(`${desc} は docs/spec/11-roadmap.md の ${when} で入ります。`);
       process.exitCode = EXIT.usage;
     });
 }

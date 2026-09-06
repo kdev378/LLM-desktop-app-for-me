@@ -87,6 +87,12 @@
 | `server.port` | 1024〜65535 | `7801` | ハーネスAPI | `akari serve` の待ち受けポート |
 | `server.allowOrigins` | 文字列配列 | `[]` | ハーネスAPI | 空ならブラウザからの要求を全拒否 |
 | `agent.approvalTimeoutMs` | 整数 または null | `null` | 実行 | null は無期限。外部ツールが落ちた実行を放置したくないなら有限に |
+| `context.mode` | `auto`/`off` | `auto` | 全体 | 文脈が溢れたときに圧縮するか（`16-context.md`） |
+| `context.compactAtRatio` | 0.3〜0.95 | `0.7` | 文脈 | 文脈長の何割で圧縮するか |
+| `context.compactAtTokens` | 1000以上 | `12000` | 文脈 | 文脈長が不明なときの絶対値 |
+| `context.keepRecentTurns` | 1〜20 | `3` | 文脈 | 生のまま残す直近ターン数 |
+| `context.digestModel` | 文字列 または null | `null` | 文脈 | 圧縮に使うモデル。null なら実行と同じ |
+| `capabilities.byModel[m].contextTokens` | 整数 または null | `null` | モデル | そのモデルの文脈長。分からないものを分かったふりにしない |
 | `logging.retainDays` | 1〜365 | 14 | ログ | 起動時に古いファイルを削除 |
 | `concurrency.maxParallelRuns` | 1〜16 | 4 | 全体 | 超えた実行は待機列に入る |
 
