@@ -61,22 +61,28 @@ export async function runCommand(promptArgs: string[], opts: RunOptions): Promis
     (await provider.listModels()).map((m) => m.id),
   );
 
+  const toolNames = opts.noTools ? [] : opts.readOnly ? READ_ONLY_TOOL_NAMES : ALL_TOOL_NAMES;
+
   // ツール呼び出しの方式を確定させてから実行する。
   // 未判定のまま非対応モデルへネイティブのツール定義を渡すと、
   // モデルが何も呼ばず「何も起きずに終わった」ように見えてしまう。
-  const toolsMode = await resolveToolsMode(
-    provider,
-    {
-      tools: endpoint.capabilities.tools,
-      probedModel: endpoint.capabilities.probedModel,
-      byModel: endpoint.capabilities.byModel,
-    },
-    model,
-  );
+  // ツールを渡さないなら方式の判定は要らない。無駄な呼び出しをしない。
+  const toolsMode =
+    toolNames.length === 0
+      ? { mode: 'none' as const, probed: false, notes: [] as string[] }
+      : await resolveToolsMode(
+          provider,
+          {
+            tools: endpoint.capabilities.tools,
+            probedModel: endpoint.capabilities.probedModel,
+            byModel: endpoint.capabilities.byModel,
+          },
+          model,
+        );
   if (!ctx.json && !ctx.quiet) {
     for (const n of toolsMode.notes) note(n);
   }
-  if (toolsMode.capabilities) {
+  if ('capabilities' in toolsMode && toolsMode.capabilities) {
     // 判定結果は保存する。毎回判定し直さないため。
     await persist(
       ctx,
@@ -86,7 +92,7 @@ export async function runCommand(promptArgs: string[], opts: RunOptions): Promis
           ...toolsMode.capabilities,
           byModel: {
             ...endpoint.capabilities.byModel,
-            ...(toolsMode.modelCapability
+            ...('modelCapability' in toolsMode && toolsMode.modelCapability
               ? { [toolsMode.modelCapability.model]: toolsMode.modelCapability.value }
               : {}),
           },
@@ -104,8 +110,6 @@ export async function runCommand(promptArgs: string[], opts: RunOptions): Promis
   if (!Number.isInteger(maxSteps) || maxSteps < 1 || maxSteps > 200) {
     throw new ExitError(EXIT.usage, '--max-steps は 1〜200 の整数で指定してください。');
   }
-
-  const toolNames = opts.noTools ? [] : opts.readOnly ? READ_ONLY_TOOL_NAMES : ALL_TOOL_NAMES;
 
   const session = Session.create({
     provider,
@@ -151,9 +155,17 @@ export async function runCommand(promptArgs: string[], opts: RunOptions): Promis
           if (!ctx.json && !ctx.quiet) {
             out(
               c.dim(
-                `${endpoint.name} / ${model}  ${ev.workspace}  権限: ${describeMode(permissionMode)}`,
+                `${endpoint.name} / ${model}  ${ev.workspace}  権限: ${describeMode(permissionMode)}  ツール: ${describeTools(opts, ev.toolNames.length)}`,
               ),
             );
+            if (ev.toolNames.length === 0) {
+              out(
+                c.yellow(
+                  'ツールを渡していないため、ファイルの読み書きとコマンド実行はできません。',
+                ),
+              );
+              out(c.dim('ファイルを触らせるには --no-tools を外してください。'));
+            }
             if (ev.instructionFiles.length > 0)
               out(c.dim(`指示ファイル: ${ev.instructionFiles.join(', ')}`));
             out('');
@@ -274,6 +286,12 @@ function resolvePermission(opts: RunOptions, fallback: PermissionMode): Permissi
     );
   }
   return mode;
+}
+
+function describeTools(opts: RunOptions, count: number): string {
+  if (opts.noTools) return 'なし（--no-tools）';
+  if (opts.readOnly) return `読み取りのみ ${count}種（--read-only）`;
+  return `${count}種`;
 }
 
 function describeMode(m: PermissionMode): string {

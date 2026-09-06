@@ -236,6 +236,10 @@ async function main(): Promise<void> {
     return;
   }
 
+  // commander に process.exit させない。終了コードは仕様（docs/spec/10-cli.md）で決めている。
+  program.exitOverride();
+  for (const cmd of program.commands) cmd.exitOverride();
+
   try {
     await program.parseAsync(argv);
   } catch (err) {

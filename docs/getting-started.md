@@ -107,6 +107,29 @@ akari runs        # 過去の実行の一覧
 | `akari run "…" < /dev/null`（パイプの中） | 承認が要る操作は自動で拒否され、終了コード3で終わる |
 | 実行後に自分でファイルを直してから `akari undo` | そのファイルは上書きされず「手で変更されています」と報告される |
 
+### モデルの指定
+
+4通りある。下ほど強い。
+
+```sh
+# 1. 接続先の既定にする（一度やれば以後ずっと）
+akari config endpoints add --name L --url http://localhost:1234/v1 --model qwen3.5-agents-a1-4b
+
+# 2. 環境変数
+export AKARI_MODEL=qwen3.5-agents-a1-4b
+
+# 3. -m / --model。サブコマンドの前でも後ろでもよい
+akari -m qwen3.5-agents-a1-4b run "テストを通して"
+akari run -m qwen3.5-agents-a1-4b "テストを通して"
+
+# 4. 判定のときだけ別のモデルを見る
+akari config endpoints probe -m qwen3.5-agents-a1-4b
+```
+
+**指定しないと自動で選びます。** そのとき、埋め込み専用のモデル
+（`nomic-embed-text` など）は飛ばしますが、複数の会話用モデルがあるなら
+どれが選ばれたかは実行開始時の行で確認してください。
+
 ### 権限モード
 
 | 指定 | 読み取り | 書き込み | コマンド | 削除 |
@@ -114,6 +137,14 @@ akari runs        # 過去の実行の一覧
 | （既定）`--permission ask` | 自動 | 承認 | 承認 | 承認 |
 | `--permission auto-edit`（`-y`） | 自動 | 自動 | 承認 | 承認 |
 | `--permission full` | 自動 | 自動 | 自動 | 承認 |
+
+### ツールを渡さない
+
+`--no-tools` を付けると、モデルに道具を渡さず生成だけ行う。
+**ファイルは一切変わらない。** モデル単体の出力を見たいときに使う。
+
+`--read-only` なら読み取り系（`read_file` / `list_dir` / `glob` / `grep`）だけを渡す。
+調べさせたいが書き換えさせたくないときに使う。
 
 `full` でも、作業フォルダの外と拒否リストのコマンドは通りません。
 

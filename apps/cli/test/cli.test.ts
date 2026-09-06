@@ -488,3 +488,59 @@ test('判定結果が設定へ保存され、2回目は判定し直さない', a
   assert.equal(ep!.capabilities.tools, 'prompted', '判定結果が保存されていること');
   assert.equal(ep!.capabilities.probedModel, 'mock-chat-7b');
 });
+
+test('--no-tools のとき、ファイルを触れないことを実行前に伝える', async () => {
+  const dir = await sandbox({ 'a.txt': 'x\n' });
+  await withScriptedServer(11808, [{ text: 'できません' }], async (ep) => {
+    const r = await akari(['-e', ep, 'run', '--no-tools', '-C', dir, '-p', 'a.txt を書き換えて']);
+    assert.equal(r.code, 0);
+    assert.match(r.stdout, /ツール: なし/);
+    assert.match(r.stdout, /ファイルの読み書きとコマンド実行はできません/);
+    assert.equal(await fs.readFile(path.join(dir, 'a.txt'), 'utf8'), 'x\n');
+  });
+});
+
+test('モデルはサブコマンドの前でも後ろでも指定できる', async () => {
+  const dir = await sandbox({});
+  await withScriptedServer(11809, [{ text: 'はい' }], async (ep) => {
+    const before = await akari([
+      '-e',
+      ep,
+      '-m',
+      'mock-chat-7b',
+      'run',
+      '--no-tools',
+      '-C',
+      dir,
+      '-p',
+      'x',
+    ]);
+    const after = await akari([
+      '-e',
+      ep,
+      'run',
+      '-m',
+      'mock-chat-7b',
+      '--no-tools',
+      '-C',
+      dir,
+      '-p',
+      'x',
+    ]);
+    assert.equal(before.code, 0);
+    assert.equal(after.code, 0);
+    for (const r of [before, after]) assert.match(r.stdout, /mock-chat-7b/);
+  });
+});
+
+test('知らないオプションは終了コード2（使い方の誤り）', async () => {
+  const r = await akari(['run', '--no-tool', '-p', 'x']);
+  assert.equal(r.code, 2);
+  assert.match(r.stderr, /unknown option/);
+});
+
+test('--help と --version は終了コード0', async () => {
+  assert.equal((await akari(['--help'])).code, 0);
+  assert.equal((await akari(['--version'])).code, 0);
+  assert.equal((await akari(['run', '--help'])).code, 0);
+});
