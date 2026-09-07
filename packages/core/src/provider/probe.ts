@@ -85,12 +85,19 @@ export async function probeEndpoint(
       notes: [...notes, 'モデルが1件も無いため、生成とツールの判定はできていません。'],
     };
   }
+  const chosenState =
+    chosen && 'state' in chosen ? (chosen as { state?: string }).state : undefined;
   // どのモデルで判定したのかを、成功しても失敗しても必ず出す。
   notes.push(
     model
       ? `判定に使ったモデル: ${testedModel}（指定）`
       : `判定に使ったモデル: ${testedModel}（未指定のため自動で選択。-m で指定できます）`,
   );
+  if (chosenState !== undefined && chosenState !== 'loaded') {
+    notes.push(
+      `注意: ${testedModel} はサーバ上で読み込まれていません（state: ${chosenState}）。判定と実行で挙動が変わることがあります。`,
+    );
+  }
   if (!isLikelyChatModel(testedModel)) {
     notes.push(
       `注意: ${testedModel} は埋め込み等の専用モデルに見えます。会話用のモデルを -m で指定してください。`,
@@ -102,6 +109,8 @@ export async function probeEndpoint(
   let sawToolCall = false;
   let sawText = false;
   let usageReported = false;
+  let usage: { prompt: number; completion: number; total: number } | undefined;
+  let textLength = 0;
   let error: ProviderError | undefined;
   let rejectedTools = false;
 
@@ -123,9 +132,13 @@ export async function probeEndpoint(
       signal,
     )) {
       if (ev.type === 'tool-call') sawToolCall = true;
-      else if (ev.type === 'text-delta') sawText = true;
-      else if (ev.type === 'finish' && ev.usage) usageReported = true;
-      else if (ev.type === 'error') {
+      else if (ev.type === 'text-delta') {
+        sawText = true;
+        textLength += ev.text.length;
+      } else if (ev.type === 'finish' && ev.usage) {
+        usageReported = true;
+        usage = ev.usage;
+      } else if (ev.type === 'error') {
         error = ev.error;
         if (ev.error.kind === 'bad_request' && /tool|function/i.test(ev.error.bodyExcerpt ?? '')) {
           rejectedTools = true;
@@ -143,23 +156,31 @@ export async function probeEndpoint(
     notes.push(`ツール呼び出し: 対応（${testedModel} で確認）`);
   } else if (rejectedTools) {
     tools = 'prompted';
-    notes.push('ツール呼び出し: サーバが tools 引数を拒否。代替方式（prompted）になります。');
+    notes.push(
+      'ツール呼び出し: サーバが tools 引数そのものを拒否しました。代替方式（prompted）になります。',
+    );
   } else if (error) {
     tools = 'none';
     notes.push(`ツール判定: 生成でエラーが出たため判定できていません（${error.message}）`);
     if (error.bodyExcerpt) notes.push(`サーバの応答: ${error.bodyExcerpt.slice(0, 300)}`);
   } else if (sawText) {
     tools = 'prompted';
-    notes.push('ツール呼び出し: 呼ばれず本文だけが返りました。代替方式（prompted）になります。');
+    notes.push(
+      `ツール呼び出し: サーバは tools 引数を受け付けましたが、モデルは呼ばず本文だけを返しました（${textLength}文字）。代替方式（prompted）になります。`,
+    );
+    notes.push(
+      '  → 多くの場合、そのモデルの配布物にツール呼び出し用のテンプレートが入っていません。' +
+        '同じモデルでも配布元によって変わります。代替方式でも動きますが、失敗しやすくなります。',
+    );
   } else {
     tools = 'none';
     notes.push('ツール判定: 応答が空でした。判定できていません。');
   }
 
   notes.push(
-    usageReported
-      ? 'トークン数: サーバが報告します'
-      : 'トークン数: サーバが報告しないため概算になります',
+    usageReported && usage
+      ? `トークン数: サーバが報告します（この判定で 入力${usage.prompt} + 出力${usage.completion}）`
+      : 'トークン数: サーバが報告しないため、以後は概算になります',
   );
   notes.push(
     contextTokens !== null

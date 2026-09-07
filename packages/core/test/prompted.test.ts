@@ -492,3 +492,26 @@ test('判定の記録に、どのモデルを使ったかが必ず入る', async
     'どのモデルで判定したかを必ず出す',
   );
 });
+
+test('サーバがツールを受け付けたのにモデルが呼ばなかった場合、それが分かる', async () => {
+  const provider = {
+    endpointId: 'ep',
+    async listModels() {
+      return [{ id: 'no-template-model' }];
+    },
+    async probe() {
+      throw new Error('使わない');
+    },
+    async *chat(): AsyncGenerator<{ type: string; text?: string; reason?: string }, void, void> {
+      yield { type: 'start' };
+      yield { type: 'text-delta', text: 'ツールは使いません。普通に答えます。' };
+      yield { type: 'finish', reason: 'stop' };
+    },
+  } as never;
+  const { probeEndpoint } = await import('../dist/index.js');
+  const r = await probeEndpoint(provider, 'ep');
+  assert.equal(r.tools, 'prompted');
+  const joined = r.notes.join('\n');
+  assert.match(joined, /tools 引数を受け付けましたが、モデルは呼ばず/);
+  assert.match(joined, /テンプレート/, 'なぜそうなるかの手がかりを出す');
+});

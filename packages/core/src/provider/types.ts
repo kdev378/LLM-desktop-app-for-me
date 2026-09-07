@@ -63,6 +63,8 @@ export type ModelInfo = {
    * 無いことを「分かっている」ように扱わない（docs/spec/16-context.md）。
    */
   contextTokens?: number;
+  /** LM Studio など、読み込み状態を返すサーバでのみ入る（'loaded' 等）。 */
+  state?: string;
 };
 
 export type ProviderErrorKind =

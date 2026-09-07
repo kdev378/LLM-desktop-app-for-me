@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { collectDiagnostics, formatDiagnostics } from '@akari/core';
-import { createContext, type GlobalOptions } from '../context.js';
+import { collectDiagnostics, formatDiagnostics, findEndpoint, updateEndpoint } from '@akari/core';
+import { createContext, persist, type GlobalOptions } from '../context.js';
 import { out, c, formatBytes } from '../term.js';
 import { ExitError, EXIT } from '../exit.js';
 import { VERSION } from '../version.js';
@@ -17,6 +17,50 @@ export async function doctorCommand(opts: DoctorOptions): Promise<void> {
     logger: ctx.logger,
     probe: opts.noProbe !== true,
   });
+
+  // doctor も判定を1回走らせている。その結果を捨てない。
+  // 捨てると「doctor で見たのに判定済みモデルが増えない」ことになる。
+  for (const ep of bundle.endpoints) {
+    const probe = ep.probe;
+    if (!probe?.reachable || !probe.testedModel) continue;
+    const target = findEndpoint(ctx.config, ep.name);
+    if (!target) continue;
+    // 今回の判定結果を、この回の表示にも反映する。
+    // 保存だけして表示に混ぜないと、常に1回前の内容が出ることになる。
+    const row = {
+      id: probe.testedModel,
+      tools: probe.tools,
+      contextTokens: probe.contextTokens,
+    };
+    ep.models = [...(ep.models ?? []).filter((m) => m.id !== row.id), row];
+
+    const known = target.capabilities.byModel[probe.testedModel];
+    if (known && known.tools === probe.tools && known.contextTokens === probe.contextTokens)
+      continue;
+    try {
+      await persist(
+        ctx,
+        updateEndpoint(ctx.config, target.id, {
+          capabilities: {
+            ...target.capabilities,
+            byModel: {
+              ...target.capabilities.byModel,
+              [probe.testedModel]: {
+                tools: probe.tools,
+                usageReported: probe.usageReported,
+                streamsToolCalls: probe.streamsToolCalls,
+                contextTokens: probe.contextTokens,
+                probedAt: new Date().toISOString(),
+              },
+            },
+          },
+        }),
+      );
+    } catch (err) {
+      // 保存できなくても診断は出す。ただし黙らない。
+      process.stderr.write(`判定結果を保存できませんでした: ${(err as Error).message}\n`);
+    }
+  }
 
   if (opts.export) {
     const target = path.resolve(opts.export);

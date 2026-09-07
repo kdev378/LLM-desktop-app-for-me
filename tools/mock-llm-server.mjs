@@ -48,6 +48,33 @@ const server = http.createServer((req, res) => {
     } catch {
       payload0 = {};
     }
+    // LM Studio 固有の REST API を再現する（AKARI_MOCK_LMSTUDIO=1 のときだけ）
+    if (url.endsWith('/api/v0/models')) {
+      if (process.env.AKARI_MOCK_LMSTUDIO !== '1') {
+        res.writeHead(404, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: 'not found' }));
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          object: 'list',
+          data: MODELS.map((id, i) => ({
+            id,
+            object: 'model',
+            type: /embed/i.test(id) ? 'embeddings' : 'llm',
+            publisher: 'mock',
+            arch: 'qwen3',
+            quantization: 'Q4_K_M',
+            state: i === 0 ? 'loaded' : 'not-loaded',
+            max_context_length: 32768,
+            ...(i === 0 ? { loaded_context_length: 8192 } : {}),
+          })),
+        }),
+      );
+      return;
+    }
+
     if (url.endsWith('/models')) {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(

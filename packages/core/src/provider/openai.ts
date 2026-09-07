@@ -1,5 +1,6 @@
 import { SseParser, ToolCallBuffer } from './sse.js';
 import { ThinkSplitter } from './think.js';
+import { fetchLmStudioModels, mergeLmStudioInfo } from './lmstudio.js';
 import {
   classifyHttp,
   classifyNetwork,
@@ -111,7 +112,7 @@ class OpenAiCompatibleProvider implements Provider {
         }),
       );
     }
-    return data
+    const models = data
       .map((m): ModelInfo | null => {
         const rec = m as Record<string, unknown>;
         const id =
@@ -128,6 +129,15 @@ class OpenAiCompatibleProvider implements Provider {
     // 並べ替えない。サーバの順序には意味があることが多く
     // （読み込み中のモデルが先頭など）、並べ替えると自動選択が的外れになる。
     // 表示のための並べ替えは呼び出し側で行う。
+
+    // OpenAI互換の /models は文脈長を返さない。LM Studio なら独自の口から補える。
+    // 取れなくても異常ではない（docs/spec/02-provider.md）。
+    const extra = await fetchLmStudioModels(this.ep.baseUrl, {
+      fetchImpl: this.doFetch,
+      ...(signal ? { signal } : {}),
+      ...(this.log ? { logger: this.log } : {}),
+    });
+    return mergeLmStudioInfo(models, extra);
   }
 
   async *chat(req: ChatRequest, signal?: AbortSignal): AsyncGenerator<ChatEvent, void, void> {

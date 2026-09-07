@@ -55,6 +55,12 @@ export {
 export { SseParser, ToolCallBuffer } from './provider/sse.js';
 export { ThinkSplitter, type SplitResult } from './provider/think.js';
 export {
+  fetchLmStudioModels,
+  mergeLmStudioInfo,
+  lmStudioModelsUrl,
+  type LmStudioModelInfo,
+} from './provider/lmstudio.js';
+export {
   classifyHttp,
   classifyNetwork,
   isRetriableBeforeFirstByte,

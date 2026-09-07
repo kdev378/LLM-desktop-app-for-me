@@ -100,7 +100,11 @@ export async function runCommand(promptArgs: string[], opts: RunOptions): Promis
           },
         },
       }),
-    ).catch(() => undefined);
+    ).catch((err: unknown) => {
+      // 保存に失敗しても実行は続けるが、黙らない。
+      // 黙ると「判定したのに次回も判定される」理由が分からなくなる。
+      note(`判定結果を保存できませんでした: ${(err as Error).message}`);
+    });
   }
   if (toolsMode.mode === 'none' && !opts.noTools) {
     throw new ExitError(EXIT.runtime, `${model} がツールを使えるか判定できませんでした。`, {

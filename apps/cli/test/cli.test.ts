@@ -560,3 +560,48 @@ test('-p - で標準入力からプロンプトを読む', async () => {
     assert.match(run.stdout, /受け取りました/);
   });
 });
+
+test('doctor は判定した結果をその場で表示し、次回も残す', async () => {
+  const proc = spawn(process.execPath, [MOCK, '11811'], {
+    stdio: 'ignore',
+    env: { ...process.env, AKARI_MOCK_MODELS: 'model-one', AKARI_MOCK_LMSTUDIO: '1' },
+  });
+  try {
+    const deadline = Date.now() + 5000;
+    for (;;) {
+      try {
+        const r = await fetch('http://127.0.0.1:11811/v1/models');
+        if (r.ok) {
+          await r.text();
+          break;
+        }
+      } catch {
+        /* まだ */
+      }
+      if (Date.now() > deadline) throw new Error('模擬サーバが起動しませんでした');
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    await akari([
+      'config',
+      'endpoints',
+      'add',
+      '--name',
+      'doc1',
+      '--url',
+      'http://127.0.0.1:11811/v1',
+    ]);
+
+    // 1回目の doctor で、その回の判定が表示に出ること（1回前の内容ではない）
+    const first = await akari(['-e', 'doc1', 'doctor']);
+    assert.equal(first.code, 0);
+    assert.match(first.stdout, /判定済みのモデル/);
+    assert.match(first.stdout, /model-one/);
+    assert.match(first.stdout, /トークン/, 'LM Studio の口から文脈長が取れる');
+
+    // 保存されているので、問い合わせなしでも残る
+    const second = await akari(['-e', 'doc1', 'doctor', '--no-probe']);
+    assert.match(second.stdout, /model-one/);
+  } finally {
+    proc.kill('SIGKILL');
+  }
+});
