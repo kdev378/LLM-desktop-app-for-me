@@ -138,6 +138,7 @@ export {
   type RunEndReason,
   type ApprovalDecision,
   type ApprovalOption,
+  type ToolsMode,
 } from './agent/events.js';
 export {
   buildSystemPrompt,

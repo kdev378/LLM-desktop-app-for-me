@@ -162,6 +162,7 @@ export async function probeEndpoint(
   } else if (error) {
     tools = 'none';
     notes.push(`ツール判定: 生成でエラーが出たため判定できていません（${error.message}）`);
+    notes.push('  → 実行時は両対応（関数呼び出しと本文ブロックの両方）で試します。');
     if (error.bodyExcerpt) notes.push(`サーバの応答: ${error.bodyExcerpt.slice(0, 300)}`);
   } else if (sawText) {
     tools = 'prompted';
@@ -175,6 +176,7 @@ export async function probeEndpoint(
   } else {
     tools = 'none';
     notes.push('ツール判定: 応答が空でした。判定できていません。');
+    notes.push('  → 実行時は両対応（関数呼び出しと本文ブロックの両方）で試します。');
   }
 
   notes.push(
@@ -303,5 +305,5 @@ export async function resolveToolsMode(
 function describeMode(mode: 'native' | 'prompted' | 'none'): string {
   if (mode === 'native') return 'ツール呼び出しに対応';
   if (mode === 'prompted') return '非対応のため代替方式（prompted）を使います';
-  return '判定できませんでした';
+  return '判定できませんでした（両対応で試します）';
 }

@@ -95,11 +95,14 @@ test('代替方式のときだけ、ブロックの書き方をシステムプ�
     tools: BUILTIN_TOOLS,
     instructions: [],
   };
-  const withPrompted = buildSystemPrompt({ ...base, promptedTools: true });
-  const withNative = buildSystemPrompt({ ...base, promptedTools: false });
+  const withPrompted = buildSystemPrompt({ ...base, toolsMode: 'prompted' });
+  const withNative = buildSystemPrompt({ ...base, toolsMode: 'native' });
+  const withBoth = buildSystemPrompt({ ...base, toolsMode: 'both' });
   assert.match(withPrompted, /akari-tool/);
   assert.match(withPrompted, /read_file/);
   assert.ok(!withNative.includes('akari-tool'), 'ネイティブ対応時は代替方式の説明を入れない');
+  assert.match(withBoth, /akari-tool/, '両対応ならブロックの書き方も渡す');
+  assert.match(withBoth, /どちらか片方/, '両方同時に使わせない');
 });
 
 // ---------------- 実行ループ ----------------
@@ -169,7 +172,7 @@ test('代替方式でもツールが実行され、ファイルが変わる', as
     workspace,
     root: home,
     permissionMode: 'full',
-    promptedTools: true,
+    toolsMode: 'prompted',
   });
   const events = await run(session, '書き換えて');
   const end = events.find((e) => e.type === 'run-end') as Extract<RunEvent, { type: 'run-end' }>;
@@ -186,7 +189,7 @@ test('代替方式ではツール定義をリクエストに載せない', async
     model: 'gemma-like',
     workspace,
     root: home,
-    promptedTools: true,
+    toolsMode: 'prompted',
   });
   await run(session, 'こんにちは');
   assert.equal(provider.requests[0]!.tools, undefined, 'tools を送らない');
@@ -204,14 +207,14 @@ test('代替方式であることを実行開始時に知らせる（動いて�
     model: 'gemma-like',
     workspace,
     root: home,
-    promptedTools: true,
+    toolsMode: 'prompted',
   });
   const events = await run(session, 'やって');
   const start = events.find((e) => e.type === 'run-start') as Extract<
     RunEvent,
     { type: 'run-start' }
   >;
-  assert.equal(start.promptedTools, true);
+  assert.equal(start.toolsMode, 'prompted');
   assert.ok(
     events.some((e) => e.type === 'notice' && /代替方式/.test(e.message)),
     '代替方式で動いていることを通知する',
@@ -231,7 +234,7 @@ test('壊れたブロックはやり直させ、次の応答で実行できる',
     workspace,
     root: home,
     permissionMode: 'full',
-    promptedTools: true,
+    toolsMode: 'prompted',
   });
   const events = await run(session, 'やって');
   assert.ok(events.some((e) => e.type === 'notice' && /JSONとして読めません/.test(e.message)));
@@ -252,7 +255,7 @@ test('4個以上のブロックは3個までを実行し、残りを黙って捨
     workspace,
     root: home,
     permissionMode: 'full',
-    promptedTools: true,
+    toolsMode: 'prompted',
   });
   const events = await run(session, 'やって');
   assert.ok(
@@ -276,7 +279,7 @@ test('代替方式でも作業フォルダの外へは出られない', async ()
     workspace,
     root: home,
     permissionMode: 'full',
-    promptedTools: true,
+    toolsMode: 'prompted',
   });
   const events = await run(session, '外に書いて');
   const result = events.find((e) => e.type === 'tool-result') as Extract<
@@ -298,7 +301,7 @@ test('代替方式でも承認は効く', async () => {
     workspace,
     root: home,
     permissionMode: 'ask',
-    promptedTools: true,
+    toolsMode: 'prompted',
   });
   const events: RunEvent[] = [];
   for await (const ev of session.send('書いて')) {
@@ -514,4 +517,128 @@ test('サーバがツールを受け付けたのにモデルが呼ばなかっ�
   const joined = r.notes.join('\n');
   assert.match(joined, /tools 引数を受け付けましたが、モデルは呼ばず/);
   assert.match(joined, /テンプレート/, 'なぜそうなるかの手がかりを出す');
+});
+
+// ---------------- 両対応（both） ----------------
+
+/**
+ * 判定で none（＝測れなかった）になったモデルでも道具を使わせるための経路。
+ * 仕様: docs/spec/02-provider.md「両対応（both）」
+ */
+
+test('両対応では、ツール定義を渡しつつ本文ブロックも受け付ける', async () => {
+  const { workspace, home, root } = await setup({ 'a.txt': '元\n' });
+  const provider = textProvider([
+    `直します。\n${fence('{"name":"write_file","arguments":{"path":"a.txt","content":"新\\n"}}')}`,
+    '書き換えました。',
+  ]);
+  const session = Session.create({
+    provider,
+    model: 'gemma-like',
+    workspace,
+    root: home,
+    permissionMode: 'full',
+    toolsMode: 'both',
+  });
+  const events = await run(session, '書き換えて');
+  assert.ok(provider.requests[0]!.tools, '関数呼び出しに対応していれば使えるよう、定義は渡す');
+  assert.match(provider.requests[0]!.messages[0]!.content, /akari-tool/, 'ブロックの書き方も渡す');
+  const end = events.find((e) => e.type === 'run-end') as Extract<RunEvent, { type: 'run-end' }>;
+  assert.equal(end.reason, 'done');
+  assert.equal(await fs.readFile(path.join(root, 'a.txt'), 'utf8'), '新\n', 'ブロックで実行される');
+});
+
+test('両対応で本文ブロックを使ったら、結果も同じ形式で返す', async () => {
+  const { workspace, home } = await setup({ 'a.txt': '中身\n' });
+  const provider = textProvider([
+    fence('{"name":"read_file","arguments":{"path":"a.txt"}}'),
+    '読みました。',
+  ]);
+  const session = Session.create({
+    provider,
+    model: 'gemma-like',
+    workspace,
+    root: home,
+    permissionMode: 'full',
+    toolsMode: 'both',
+  });
+  await run(session, '読んで');
+  // 2回目のリクエストに、ブロック方式の結果が利用者メッセージとして入っていること。
+  // ここで role:'tool' を混ぜると、tool_calls の無い会話としてサーバに 400 で弾かれる。
+  const second = provider.requests[1]!.messages;
+  assert.ok(
+    !second.some((m) => m.role === 'tool'),
+    '本文ブロックで呼ばれたものに tool メッセージを返さない',
+  );
+  assert.ok(second.some((m) => m.role === 'user' && /akari-tool-result/.test(m.content)));
+});
+
+test('両対応で判定できていないことを実行開始時に知らせる', async () => {
+  const { workspace, home } = await setup();
+  const session = Session.create({
+    provider: textProvider(['はい。']),
+    model: 'gemma-like',
+    workspace,
+    root: home,
+    toolsMode: 'both',
+  });
+  const events = await run(session, 'やって');
+  const start = events.find((e) => e.type === 'run-start') as Extract<
+    RunEvent,
+    { type: 'run-start' }
+  >;
+  assert.equal(start.toolsMode, 'both');
+  assert.ok(
+    events.some((e) => e.type === 'notice' && /両対応/.test(e.message)),
+    '確認できていないことを隠さない',
+  );
+});
+
+test('両対応で関数呼び出しが来たら、本文のブロックは見ない（二重実行しない）', async () => {
+  const { workspace, home, root } = await setup();
+  let turn = 0;
+  const provider = {
+    endpointId: 'ep_both',
+    async listModels() {
+      return [{ id: 'm' }];
+    },
+    async probe(): Promise<never> {
+      throw new Error('使わない');
+    },
+    async *chat(req: ChatRequest): AsyncGenerator<ChatEvent, void, void> {
+      const t = turn++;
+      yield { type: 'start', model: req.model };
+      if (t === 0) {
+        // 関数呼び出しと、同じ意味の本文ブロックを両方出してくるモデル
+        yield {
+          type: 'text-delta',
+          text: fence('{"name":"write_file","arguments":{"path":"block.txt","content":"x"}}'),
+        };
+        yield {
+          type: 'tool-call',
+          id: 'call_1',
+          name: 'write_file',
+          argumentsRaw: JSON.stringify({ path: 'native.txt', content: 'x' }),
+        };
+        yield { type: 'finish', reason: 'tool_calls' };
+      } else {
+        yield { type: 'text-delta', text: '終わりです。' };
+        yield { type: 'finish', reason: 'stop' };
+      }
+    },
+  } satisfies Provider;
+  const session = Session.create({
+    provider,
+    model: 'm',
+    workspace,
+    root: home,
+    permissionMode: 'full',
+    toolsMode: 'both',
+  });
+  await run(session, 'やって');
+  assert.equal(await fs.readFile(path.join(root, 'native.txt'), 'utf8'), 'x');
+  await assert.rejects(
+    () => fs.stat(path.join(root, 'block.txt')),
+    'すでに関数呼び出しが来ているなら本文は読まない',
+  );
 });

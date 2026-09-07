@@ -25,6 +25,7 @@ import {
   type PermissionMode,
   type RunEndReason,
   type RunEvent,
+  type ToolsMode,
 } from './events.js';
 import type {
   Provider,
@@ -51,8 +52,11 @@ export type SessionOptions = {
   toolNames?: string[];
   maxSteps?: number;
   limits?: Partial<ToolLimits>;
-  /** ネイティブのツール呼び出しに対応していない接続先向け。 */
-  promptedTools?: boolean;
+  /**
+   * 道具の渡し方。既定は 'both'（対応が分からないときの安全側）。
+   * docs/spec/02-provider.md
+   */
+  toolsMode?: ToolsMode;
   projectInstructions?: string;
   conversationInstructions?: string;
   /** 続きから始める場合の既存メッセージ。 */
@@ -68,6 +72,9 @@ const MAX_CALLS_PER_STEP = 8;
 const LOOP_THRESHOLD = 3;
 /** 代替方式で1回の応答から受け付けるブロック数（docs/spec/02-provider.md）。 */
 const MAX_PROMPTED_CALLS_PER_STEP = 3;
+
+/** ツール呼び出しと、それがどう来たか。 */
+type PendingCall = ToolCallRequest & { origin: 'native' | 'prompted' };
 
 export class Session {
   readonly runId: string;
@@ -155,12 +162,12 @@ export class Session {
 
     const instructions = await loadInstructionFiles(this.workspace.root);
     const git = await detectGit(this.workspace.root);
-    const promptedTools = this.opts.promptedTools === true;
+    const toolsMode = this.opts.toolsMode ?? 'both';
 
     const system = buildSystemPrompt({
       workspaceRoot: this.workspace.root,
       tools: this.tools,
-      promptedTools,
+      toolsMode,
       instructions,
       projectInstructions: this.opts.projectInstructions,
       conversationInstructions: this.opts.conversationInstructions,
@@ -182,7 +189,7 @@ export class Session {
       permissionMode: this.opts.permissionMode,
       instructionFiles: instructions.map((i) => i.name),
       toolNames: this.tools.map((t) => t.name),
-      promptedTools,
+      toolsMode,
     };
 
     if (this.unknownTools.length > 0) {
@@ -192,12 +199,19 @@ export class Session {
         message: `知らないツール名を指定されました: ${this.unknownTools.join(', ')}`,
       };
     }
-    if (promptedTools) {
+    if (toolsMode === 'prompted') {
       yield {
         type: 'notice',
         level: 'warn',
         message:
           '代替方式（prompted）で動作中です。ネイティブのツール呼び出しより失敗しやすくなります。',
+      };
+    } else if (toolsMode === 'both') {
+      yield {
+        type: 'notice',
+        level: 'warn',
+        message:
+          'ツール呼び出しへの対応が確認できていないため、両対応（関数呼び出しと本文ブロックの両方）で試します。',
       };
     }
 
@@ -221,7 +235,7 @@ export class Session {
         {
           model: this.opts.model,
           messages: this.messages,
-          ...(promptedTools ? {} : { tools: toolDefinitions(this.tools) }),
+          ...(toolsMode === 'prompted' ? {} : { tools: toolDefinitions(this.tools) }),
         },
         this.controller.signal,
       )) {
@@ -252,10 +266,10 @@ export class Session {
         break;
       }
 
-      // 代替方式では本文からツール呼び出しを取り出す
-      let calls: ToolCallRequest[] = nativeCalls;
+      // 関数呼び出しが来ていればそれを使う。来ていなければ本文のブロックを見る。
+      let calls: PendingCall[] = nativeCalls.map((c) => ({ ...c, origin: 'native' as const }));
       let promptedErrors: string[] = [];
-      if (promptedTools) {
+      if (toolsMode !== 'native' && calls.length === 0) {
         const extracted = extractPromptedCalls(text);
         promptedErrors = extracted.errors;
         if (extracted.calls.length > MAX_PROMPTED_CALLS_PER_STEP) {
@@ -268,9 +282,12 @@ export class Session {
             `1回の応答に ${extracted.calls.length} 個のブロックがありました。上限 ${MAX_PROMPTED_CALLS_PER_STEP} 個までを実行し、残りは実行していません: ${dropped}`,
           );
         }
-        calls = extracted.calls
-          .slice(0, MAX_PROMPTED_CALLS_PER_STEP)
-          .map((c) => ({ id: shortId('call_'), name: c.name, argumentsRaw: c.argumentsRaw }));
+        calls = extracted.calls.slice(0, MAX_PROMPTED_CALLS_PER_STEP).map((c) => ({
+          id: shortId('call_'),
+          name: c.name,
+          argumentsRaw: c.argumentsRaw,
+          origin: 'prompted' as const,
+        }));
       }
 
       this.messages.push({
@@ -337,7 +354,7 @@ export class Session {
           break;
         }
 
-        const outcome = yield* this.executeCall(call, journal, promptedTools);
+        const outcome = yield* this.executeCall(call, journal);
         if (outcome === 'abort') {
           abortRequested = true;
           endReason = 'aborted';
@@ -360,15 +377,14 @@ export class Session {
 
   /** 1つのツール呼び出しを、承認を挟んで実行する。 */
   private async *executeCall(
-    call: ToolCallRequest,
+    call: PendingCall,
     journal: ChangeJournal,
-    promptedTools: boolean,
   ): AsyncGenerator<RunEvent, 'ok' | 'abort', void> {
     const tool = findTool(this.tools, call.name);
     if (!tool) {
       const msg = `そのツールはありません: ${call.name}。使えるのは ${this.tools.map((t) => t.name).join(', ')} です。`;
       yield { type: 'tool-result', callId: call.id, name: call.name, ok: false, summary: msg };
-      this.pushToolResult(call, false, msg, promptedTools);
+      this.pushToolResult(call, false, msg);
       return 'ok';
     }
 
@@ -378,7 +394,7 @@ export class Session {
     } catch {
       const msg = `引数がJSONとして読めません: ${call.argumentsRaw.slice(0, 200)}`;
       yield { type: 'tool-result', callId: call.id, name: call.name, ok: false, summary: msg };
-      this.pushToolResult(call, false, msg, promptedTools);
+      this.pushToolResult(call, false, msg);
       return 'ok';
     }
 
@@ -419,7 +435,7 @@ export class Session {
           ok: false,
           summary: check.message,
         };
-        this.pushToolResult(call, false, check.message, promptedTools);
+        this.pushToolResult(call, false, check.message);
         return 'ok';
       }
     }
@@ -432,7 +448,7 @@ export class Session {
         if (hit !== null) {
           const msg = `このコマンドは実行できません（拒否リストの "${hit}" に一致）。`;
           yield { type: 'tool-result', callId: call.id, name: tool.name, ok: false, summary: msg };
-          this.pushToolResult(call, false, msg, promptedTools);
+          this.pushToolResult(call, false, msg);
           return 'ok';
         }
       }
@@ -454,7 +470,7 @@ export class Session {
           ok: false,
           summary: '拒否されました',
         };
-        this.pushToolResult(call, false, msg, promptedTools);
+        this.pushToolResult(call, false, msg);
         return 'ok';
       }
       if (decision.kind === 'allow-session') this.sessionAllows.add(decision.scope);
@@ -496,7 +512,7 @@ export class Session {
     } catch (err) {
       const msg = `ツールの実行が失敗しました: ${(err as Error).message}`;
       yield { type: 'tool-result', callId: call.id, name: tool.name, ok: false, summary: msg };
-      this.pushToolResult(call, false, msg, promptedTools);
+      this.pushToolResult(call, false, msg);
       return 'ok';
     }
 
@@ -508,7 +524,7 @@ export class Session {
       summary: result.summary,
       ...(result.change ? { change: result.change } : {}),
     };
-    this.pushToolResult(call, result.ok, result.content, promptedTools);
+    this.pushToolResult(call, result.ok, result.content);
     return 'ok';
   }
 
@@ -562,13 +578,10 @@ export class Session {
     return typeof p === 'string' ? `${name}:${p}` : null;
   }
 
-  private pushToolResult(
-    call: ToolCallRequest,
-    ok: boolean,
-    content: string,
-    promptedTools: boolean,
-  ): void {
-    if (promptedTools) {
+  private pushToolResult(call: PendingCall, ok: boolean, content: string): void {
+    // 呼ばれ方に合わせて返す。関数呼び出しには tool メッセージ、
+    // 本文ブロックには利用者メッセージ。混ぜると相手が解釈できない。
+    if (call.origin === 'prompted') {
       this.messages.push({ role: 'user', content: formatPromptedResult(call.name, ok, content) });
     } else {
       this.messages.push({ role: 'tool', toolCallId: call.id, name: call.name, content });

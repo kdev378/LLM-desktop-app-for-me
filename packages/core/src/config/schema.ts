@@ -67,6 +67,14 @@ export const generationSchema = z.object({
 
 export const agentSchema = z.object({
   permissionMode: z.enum(['ask', 'autoEdit', 'full']).default('ask'),
+  /**
+   * 道具の渡し方（docs/spec/02-provider.md）。
+   * auto     … 判定結果に従う。判定できなければ both
+   * native   … 関数呼び出しだけ
+   * prompted … 本文のブロックだけ
+   * both     … 両方受け付ける
+   */
+  toolsMode: z.enum(['auto', 'native', 'prompted', 'both']).default('auto'),
   maxSteps: z.number().int().min(1).max(200).default(25),
   commandTimeoutMs: z.number().int().min(1000).max(1800000).default(120000),
   toolOutputLimitBytes: z.number().int().min(1000).max(10000000).default(100000),

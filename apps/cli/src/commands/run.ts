@@ -11,6 +11,7 @@ import {
   type ApprovalDecision,
   type RunEvent,
   type PermissionMode,
+  type ToolsMode,
 } from '@akari/core';
 import { createContext, pickEndpoint, pickModel, persist, type GlobalOptions } from '../context.js';
 import { c, out, write, note, isInteractive, formatDuration } from '../term.js';
@@ -31,6 +32,7 @@ export type RunOptions = GlobalOptions & {
   maxSteps?: string;
   noTools?: boolean;
   readOnly?: boolean;
+  toolsMode?: string;
 };
 
 export async function runCommand(promptArgs: string[], opts: RunOptions): Promise<void> {
@@ -68,10 +70,11 @@ export async function runCommand(promptArgs: string[], opts: RunOptions): Promis
   // ツール呼び出しの方式を確定させてから実行する。
   // 未判定のまま非対応モデルへネイティブのツール定義を渡すと、
   // モデルが何も呼ばず「何も起きずに終わった」ように見えてしまう。
-  // ツールを渡さないなら方式の判定は要らない。無駄な呼び出しをしない。
+  // 道具の渡し方。明示されていれば判定そのものを省く（無駄な呼び出しを1回減らす）。
+  const forced = resolveToolsModeOption(opts, ctx.config.agent.toolsMode);
   const toolsMode =
-    toolNames.length === 0
-      ? { mode: 'none' as const, probed: false, notes: [] as string[] }
+    toolNames.length === 0 || forced !== null
+      ? { mode: (forced ?? 'both') as ToolsMode, probed: false, notes: [] as string[] }
       : await resolveToolsMode(
           provider,
           {
@@ -106,11 +109,9 @@ export async function runCommand(promptArgs: string[], opts: RunOptions): Promis
       note(`判定結果を保存できませんでした: ${(err as Error).message}`);
     });
   }
-  if (toolsMode.mode === 'none' && !opts.noTools) {
-    throw new ExitError(EXIT.runtime, `${model} がツールを使えるか判定できませんでした。`, {
-      hint: 'akari config endpoints probe で判定し直すか、--no-tools で生成だけ行ってください。',
-    });
-  }
+  // 判定できなかった（none）ときに実行を断らない。
+  // none は「対応していない」ではなく「測れなかった」。両対応なら試せる。
+  const effectiveMode: ToolsMode = toolsMode.mode === 'none' ? 'both' : toolsMode.mode;
 
   const maxSteps = opts.maxSteps !== undefined ? Number(opts.maxSteps) : ctx.config.agent.maxSteps;
   if (!Number.isInteger(maxSteps) || maxSteps < 1 || maxSteps > 200) {
@@ -124,7 +125,7 @@ export async function runCommand(promptArgs: string[], opts: RunOptions): Promis
     permissionMode,
     toolNames,
     maxSteps,
-    promptedTools: toolsMode.mode === 'prompted',
+    toolsMode: effectiveMode,
     limits: {
       commandTimeoutMs: ctx.config.agent.commandTimeoutMs,
       toolOutputLimitBytes: ctx.config.agent.toolOutputLimitBytes,
@@ -161,7 +162,7 @@ export async function runCommand(promptArgs: string[], opts: RunOptions): Promis
           if (!ctx.json && !ctx.quiet) {
             out(
               c.dim(
-                `${endpoint.name} / ${model}  ${ev.workspace}  権限: ${describeMode(permissionMode)}  ツール: ${describeTools(opts, ev.toolNames.length)}`,
+                `${endpoint.name} / ${model}  ${ev.workspace}  権限: ${describeMode(permissionMode)}  ツール: ${describeTools(opts, ev.toolNames.length)}${ev.toolNames.length > 0 ? ` / ${describeToolsMode(ev.toolsMode)}` : ''}`,
               ),
             );
             if (ev.toolNames.length === 0) {
@@ -294,10 +295,30 @@ function resolvePermission(opts: RunOptions, fallback: PermissionMode): Permissi
   return mode;
 }
 
+/** --tools-mode / 設定を、強制する渡し方へ解決する。auto なら null（判定に従う）。 */
+function resolveToolsModeOption(
+  opts: RunOptions,
+  fromConfig: 'auto' | ToolsMode,
+): ToolsMode | null {
+  const raw = opts.toolsMode ?? process.env.AKARI_TOOLS_MODE ?? fromConfig;
+  if (raw === 'auto' || raw === undefined) return null;
+  if (raw === 'native' || raw === 'prompted' || raw === 'both') return raw;
+  throw new ExitError(
+    EXIT.usage,
+    `--tools-mode は auto / native / prompted / both のいずれかです（受け取った値: ${raw}）。`,
+  );
+}
+
 function describeTools(opts: RunOptions, count: number): string {
   if (opts.noTools) return 'なし（--no-tools）';
   if (opts.readOnly) return `読み取りのみ ${count}種（--read-only）`;
   return `${count}種`;
+}
+
+function describeToolsMode(m: ToolsMode): string {
+  if (m === 'native') return '関数呼び出し';
+  if (m === 'prompted') return '本文ブロック（代替方式）';
+  return '両対応';
 }
 
 function describeMode(m: PermissionMode): string {

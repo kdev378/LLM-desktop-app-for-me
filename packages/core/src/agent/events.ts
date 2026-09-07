@@ -11,6 +11,14 @@ import type { ProviderError, Usage } from '../provider/types.js';
 
 export type PermissionMode = 'ask' | 'autoEdit' | 'full';
 
+/**
+ * 道具の渡し方（docs/spec/02-provider.md）。
+ * native   … 標準の関数呼び出しだけ
+ * prompted … 本文の ```akari-tool ブロックだけ
+ * both     … 両方受け付ける（対応が確認できていないとき）
+ */
+export type ToolsMode = 'native' | 'prompted' | 'both';
+
 export type ApprovalOption = {
   /** 端末で押す1文字。UIではボタンのラベルに使う。 */
   key: string;
@@ -35,7 +43,8 @@ export type RunEvent =
       permissionMode: PermissionMode;
       instructionFiles: string[];
       toolNames: string[];
-      promptedTools: boolean;
+      /** 道具の渡し方（docs/spec/02-provider.md）。 */
+      toolsMode: ToolsMode;
     }
   | { type: 'step-start'; step: number }
   | { type: 'text-delta'; text: string }

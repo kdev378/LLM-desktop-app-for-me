@@ -46,6 +46,7 @@
   "generation": { "temperature": 0.7, "topP": 1.0, "maxTokens": null },
   "agent": {
     "permissionMode": "ask",
+    "toolsMode": "auto",
     "maxSteps": 25,
     "commandTimeoutMs": 120000,
     "toolOutputLimitBytes": 100000,
@@ -73,6 +74,7 @@
 | `generation.topP` | 0.0〜1.0 | 1.0 | 同上 | — |
 | `generation.maxTokens` | 1以上 または null | null | 同上 | null はサーバ既定に任せる |
 | `agent.permissionMode` | `ask` / `autoEdit` / `full` | `ask` | 全体（実行ごとに上書き可） | `05-agent.md` で定義 |
+| `agent.toolsMode` | `auto` / `native` / `prompted` / `both` | `auto` | 全体（実行ごとに上書き可） | 道具の渡し方。`auto` は判定に従う。`02-provider.md`「両対応（both）」 |
 | `agent.maxSteps` | 1〜200 | 25 | 実行 | 上限に達したら停止し、理由を表示 |
 | `agent.commandTimeoutMs` | 1000〜1800000 | 120000 | ツール実行 | 超えたらプロセスグループごと終了 |
 | `agent.toolOutputLimitBytes` | 1000〜10000000 | 100000 | ツール実行 | 超過分は中央を省略し、省略した旨を明記 |

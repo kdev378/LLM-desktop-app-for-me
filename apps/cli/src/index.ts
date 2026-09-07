@@ -64,6 +64,7 @@ program
   .option('--max-steps <n>', 'ステップ上限')
   .option('--no-tools', 'ツールを渡さない（純粋な生成）')
   .option('--read-only', '読み取り系のツールだけを渡す')
+  .option('--tools-mode <mode>', 'auto / native / prompted / both。判定を無視して渡し方を決める')
   .action(async (args: string[] | undefined, o) =>
     run(() => runCommand(args ?? [], { ...globals(), ...o, noTools: o.tools === false })),
   );

@@ -2,6 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
 import type { ToolSpec } from '../tools/types.js';
+import type { ToolsMode } from './events.js';
 
 /**
  * システムプロンプトの組み立て。仕様: docs/spec/05-agent.md「システムプロンプト」
@@ -40,8 +41,8 @@ export async function loadInstructionFiles(workspaceRoot: string): Promise<Loade
 export type PromptContext = {
   workspaceRoot: string;
   tools: ToolSpec[];
-  /** ネイティブのツール呼び出しに対応していない接続先向けの代替方式 */
-  promptedTools: boolean;
+  /** 道具の渡し方（docs/spec/02-provider.md）。 */
+  toolsMode: ToolsMode;
   instructions: LoadedInstruction[];
   projectInstructions?: string;
   conversationInstructions?: string;
@@ -69,8 +70,8 @@ export function buildSystemPrompt(ctx: PromptContext): string {
 - 作業フォルダ: ${ctx.workspaceRoot}
 - git: ${ctx.git?.isRepo ? `リポジトリ（ブランチ: ${ctx.git.branch ?? '不明'}）` : 'リポジトリではない'}`);
 
-  if (ctx.promptedTools) {
-    parts.push(buildPromptedToolsSection(ctx.tools));
+  if (ctx.toolsMode !== 'native') {
+    parts.push(buildPromptedToolsSection(ctx.tools, ctx.toolsMode === 'both'));
   }
 
   for (const ins of ctx.instructions) {
@@ -91,12 +92,17 @@ export function buildSystemPrompt(ctx: PromptContext): string {
  * ツール呼び出しに対応していないサーバ向けの代替方式（docs/spec/02-provider.md）。
  * 解釈は厳格に行う。推測で補正しない。
  */
-function buildPromptedToolsSection(tools: ToolSpec[]): string {
+function buildPromptedToolsSection(tools: ToolSpec[], both: boolean): string {
   const list = tools
     .map((t) => `- ${t.name}: ${t.description}\n  引数のスキーマ: ${JSON.stringify(t.parameters)}`)
     .join('\n');
-  return `この接続先はツール呼び出しの標準機能に対応していません。道具を使うときは、
-本文の中に次の形のブロックだけを書いてください。
+  const intro = both
+    ? `道具は2通りの方法で呼べます。**どちらか片方**を使ってください。
+1. 標準の関数呼び出し（対応していれば、こちらが確実です）
+2. 対応していない場合は、本文の中に次の形のブロックを書いてください。`
+    : `この接続先はツール呼び出しの標準機能に対応していません。道具を使うときは、
+本文の中に次の形のブロックだけを書いてください。`;
+  return `${intro}
 
 \`\`\`akari-tool
 {"name": "read_file", "arguments": {"path": "src/main.ts"}}
