@@ -1,6 +1,18 @@
 import readline from 'node:readline';
-import { createProvider, getProviderError, type ChatMessage, type Provider } from '@akari/core';
-import { createContext, pickEndpoint, pickModel, type GlobalOptions } from '../context.js';
+import {
+  createProvider,
+  getProviderError,
+  type ChatMessage,
+  type Provider,
+  type ReasoningLevel,
+} from '@akari/core';
+import {
+  createContext,
+  pickEndpoint,
+  pickModel,
+  pickReasoning,
+  type GlobalOptions,
+} from '../context.js';
 import { c, out, write, note, isInteractive, formatDuration } from '../term.js';
 import { ExitError, EXIT } from '../exit.js';
 
@@ -10,6 +22,7 @@ export type ChatOptions = GlobalOptions & {
   temperature?: string;
   maxTokens?: string;
   timeout?: string;
+  think?: string;
 };
 
 /**
@@ -38,7 +51,8 @@ export async function chatCommand(opts: ChatOptions): Promise<void> {
   const messages: ChatMessage[] = [];
   if (opts.system) messages.push({ role: 'system', content: opts.system });
 
-  const params = { temperature, maxTokens };
+  const reasoning = pickReasoning(opts.think, ctx.config.generation.reasoning);
+  const params = { temperature, maxTokens, reasoning };
   // -p - は「標準入力から読む」（docs/spec/10-cli.md）
   const explicit = opts.prompt === '-' ? null : (opts.prompt ?? null);
   const oneShot = explicit ?? (await readStdinIfPiped());
@@ -161,7 +175,7 @@ async function runTurn(
   provider: Provider,
   model: string,
   messages: ChatMessage[],
-  params: { temperature: number; maxTokens: number | null },
+  params: { temperature: number; maxTokens: number | null; reasoning?: ReasoningLevel },
   json: boolean,
   quiet: boolean,
   isExternal: boolean,
@@ -199,6 +213,7 @@ async function runTurn(
         messages,
         temperature: params.temperature,
         maxTokens: params.maxTokens,
+        ...(params.reasoning ? { reasoning: params.reasoning } : {}),
       },
       signal,
     )) {
@@ -206,6 +221,10 @@ async function runTurn(
         out(JSON.stringify({ ts: new Date().toISOString(), ...ev }));
       }
       switch (ev.type) {
+        // 送ったものが通らなかったことを黙らない
+        case 'notice':
+          if (!json) process.stderr.write(c.yellow('  ! ') + ev.message + '\n');
+          break;
         case 'text-delta':
           if (firstTokenAt === null) {
             firstTokenAt = Date.now();

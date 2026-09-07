@@ -251,3 +251,74 @@ test('待ち上限を超えたら、延ばし方を添えて止める', async ()
   assert.match(e.message, /config endpoints set --timeout/, '直し方を出す');
   await s.close();
 });
+
+// ---------------- 思考量の指定 ----------------
+
+/**
+ * 思考（reasoning）の量。サーバによって受け付ける口が違い、
+ * 理解しないサーバは 400 を返す。仕様: docs/spec/02-provider.md「思考量の指定」
+ */
+
+test('off はテンプレート側の切り替えで送る', async () => {
+  const s = await startFakeServer();
+  await collect(createProvider(endpoint(s.url)).chat({ ...req, reasoning: 'off' }));
+  const body = s.requests.at(-1)!.body as Record<string, unknown>;
+  assert.deepEqual(body.chat_template_kwargs, { enable_thinking: false });
+  assert.equal(body.reasoning_effort, undefined, '両方は送らない');
+  await s.close();
+});
+
+test('low / medium / high は reasoning_effort で送る', async () => {
+  const s = await startFakeServer();
+  for (const level of ['low', 'medium', 'high'] as const) {
+    await collect(createProvider(endpoint(s.url)).chat({ ...req, reasoning: level }));
+    const body = s.requests.at(-1)!.body as Record<string, unknown>;
+    assert.equal(body.reasoning_effort, level);
+    assert.equal(body.chat_template_kwargs, undefined);
+  }
+  await s.close();
+});
+
+test('指定しなければ何も送らない（サーバの既定に任せる）', async () => {
+  const s = await startFakeServer();
+  await collect(createProvider(endpoint(s.url)).chat(req));
+  const body = s.requests.at(-1)!.body as Record<string, unknown>;
+  assert.equal(body.reasoning_effort, undefined);
+  assert.equal(body.chat_template_kwargs, undefined);
+  await s.close();
+});
+
+test('受け付けないサーバでは外して送り直し、効かないことを知らせる', async () => {
+  const s = await startFakeServer({
+    kind: 'rejectParam',
+    param: 'reasoning_effort',
+    then: { kind: 'text', chunks: ['思考なしで答えます'] },
+  });
+  const events = await collect(createProvider(endpoint(s.url)).chat({ ...req, reasoning: 'high' }));
+  const notice = events.find((e) => e.type === 'notice');
+  assert.ok(notice, '黙って落とさない');
+  assert.match(notice!.message as string, /reasoning_effort/);
+  assert.match(notice!.message as string, /思考量の指定は効きません/, '何が効かないかを言う');
+  const text = events
+    .filter((e) => e.type === 'text-delta')
+    .map((e) => e.text)
+    .join('');
+  assert.equal(text, '思考なしで答えます', '外したうえで生成は成功する');
+  // 2回目のリクエストには載っていないこと
+  assert.equal((s.requests.at(-1)!.body as Record<string, unknown>).reasoning_effort, undefined);
+  await s.close();
+});
+
+test('送っていないパラメータを名指しされても、無限に送り直さない', async () => {
+  // reasoning を指定していないので reasoning_effort は載っていない。
+  // それでも名前が出てくる 400 に対して、落とすものが無いまま回り続けないこと。
+  const s = await startFakeServer({
+    kind: 'status',
+    status: 400,
+    body: JSON.stringify({ error: { message: "unknown field 'reasoning_effort'" } }),
+  });
+  const events = await collect(createProvider(endpoint(s.url)).chat(req));
+  assert.equal(events.at(-1)!.type, 'error');
+  assert.ok(s.requests.length <= 4, `送り直しすぎ: ${s.requests.length}回`);
+  await s.close();
+});

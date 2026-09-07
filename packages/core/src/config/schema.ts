@@ -65,6 +65,11 @@ export const endpointSchema = z.object({
 });
 
 export const generationSchema = z.object({
+  /**
+   * 思考（reasoning）の量。docs/spec/02-provider.md「思考量の指定」
+   * auto はサーバに任せる（何も送らない）。
+   */
+  reasoning: z.enum(['auto', 'off', 'low', 'medium', 'high']).default('auto'),
   temperature: z.number().min(0).max(2).default(0.7),
   topP: z.number().min(0).max(1).default(1),
   maxTokens: z.number().int().min(1).nullable().default(null),

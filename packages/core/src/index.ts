@@ -78,6 +78,8 @@ export type {
   ProviderErrorKind,
   EndpointProbeResult,
   FinishReason,
+  ReasoningLevel,
+  OptionalParam,
   Usage,
   Role,
 } from './provider/types.js';

@@ -11,6 +11,7 @@ import {
   type LogLevel,
 } from '@akari/core';
 import { ExitError, EXIT } from './exit.js';
+import type { ReasoningLevel } from '@akari/core';
 import { c, setNotes, note } from './term.js';
 
 /**
@@ -72,6 +73,23 @@ export async function pickEndpoint(
   const timeoutMs = pickTimeoutMs(timeout);
   // その1回だけ待ち時間を延ばす。設定は書き換えない。
   return timeoutMs === null ? endpoint : { ...endpoint, timeoutMs };
+}
+
+/**
+ * --think / AKARI_REASONING / generation.reasoning。
+ * auto（既定）はサーバに任せる＝何も送らない。
+ */
+export function pickReasoning(
+  opt: string | undefined,
+  fromConfig: 'auto' | ReasoningLevel,
+): ReasoningLevel | undefined {
+  const raw = opt ?? process.env.AKARI_REASONING ?? fromConfig;
+  if (raw === 'auto' || raw === undefined || raw === '') return undefined;
+  if (raw === 'off' || raw === 'low' || raw === 'medium' || raw === 'high') return raw;
+  throw new ExitError(
+    EXIT.usage,
+    `--think は auto / off / low / medium / high のいずれかです（受け取った値: ${raw}）。`,
+  );
 }
 
 /** --timeout / AKARI_TIMEOUT（秒）。指定が無ければ null。 */

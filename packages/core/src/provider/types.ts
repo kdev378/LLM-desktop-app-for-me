@@ -39,7 +39,21 @@ export type ChatRequest = {
   maxTokens?: number | null;
   stop?: string[];
   seed?: number;
+  /**
+   * 思考（reasoning）の量。docs/spec/02-provider.md「思考量の指定」
+   * off だけは別の口（chat_template_kwargs）を使う。テンプレート側の切り替えだから。
+   */
+  reasoning?: ReasoningLevel;
 };
+
+/** 思考の量。off は「思考させない」。 */
+export type ReasoningLevel = 'off' | 'low' | 'medium' | 'high';
+
+/**
+ * サーバによっては理解せず 400 を返す、任意の追加パラメータ。
+ * 落として送り直せるように名前を持たせる（docs/spec/02-provider.md）。
+ */
+export type OptionalParam = 'stream_options' | 'reasoning_effort' | 'chat_template_kwargs';
 
 export type FinishReason =
   'stop' | 'length' | 'tool_calls' | 'content_filter' | 'aborted' | 'unknown';
@@ -52,6 +66,8 @@ export type ChatEvent =
   | { type: 'reasoning-delta'; text: string }
   | { type: 'tool-call'; id: string; name: string; argumentsRaw: string }
   | { type: 'finish'; reason: FinishReason; usage?: Usage }
+  /** 送ったものが受け付けられなかった等、結果に影響するが失敗ではないこと。 */
+  | { type: 'notice'; message: string }
   | { type: 'error'; error: ProviderError };
 
 export type ModelInfo = {

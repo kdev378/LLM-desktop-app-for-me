@@ -88,6 +88,7 @@ akari run [オプション] [プロンプト...]
 | `--read-only` | — | 読み取り系の道具だけ渡す |
 | `--tools-mode <mode>` | `auto` | 道具の渡し方。`auto` / `native` / `prompted` / `both`（後述） |
 | `--timeout <秒>` | 300 | この実行だけ、最初の応答までの待ち上限を変える。設定は書き換えない |
+| `--think <量>` | `auto` | 思考（reasoning）の量。`auto` / `off` / `low` / `medium` / `high`（後述） |
 
 ### 権限モード
 
@@ -316,6 +317,7 @@ akari config set logging.level debug
 
 | 項目 | 型 / 範囲 | 既定 |
 |---|---|---|
+| `generation.reasoning` | `auto`/`off`/`low`/`medium`/`high` | `auto` |
 | `generation.temperature` | 0.0〜2.0 | `0.7` |
 | `generation.topP` | 0.0〜1.0 | `1` |
 | `generation.maxTokens` | 1以上 または `null` | `null` |
@@ -442,6 +444,39 @@ akari config endpoints probe [名前|ID] [-m <モデル>] [--context <トーク�
 
 ---
 
+## 思考の量（`--think`）
+
+Qwen3 系のように思考を出すモデルは、思考が長いと待ち時間もトークンも食う。
+文脈長の小さいモデルでは、思考だけで入りきらなくなる。
+
+```sh
+akari run --think off "直して"      # 思考させない（速い）
+akari chat --think high -p "…"      # よく考えさせる
+```
+
+| 指定 | 送るもの |
+|---|---|
+| `auto`（既定） | 何も送らない。サーバとモデルの既定に任せる |
+| `off` | `chat_template_kwargs: {"enable_thinking": false}` |
+| `low` / `medium` / `high` | `reasoning_effort: "<値>"` |
+
+`off` だけ別の口を使う。思考を出すか出さないかはチャットテンプレート側の切り替えで、
+量の指定とは別の仕組みだから。
+
+**受け付けないサーバでは自動で外して送り直す。** そのとき、こう出る:
+
+```
+  ! この接続先は reasoning_effort を受け付けませんでした。外して送り直します（思考量の指定は効きません）。
+```
+
+このメッセージが出たら、**指定は効いていない**。生成そのものは成功する。
+黙って落とさないのは、効いたように見えると「なぜ思考が止まらないのか」が分からなくなるため。
+
+`akari config set generation.reasoning off` で既定にできる。
+強さは `--think` > `AKARI_REASONING` > 設定。
+
+---
+
 ## 待ち時間（遅い・タイムアウトするとき）
 
 時間の上限は3つある。**どれも別のもの**なので、出たメッセージで見分ける。
@@ -492,6 +527,7 @@ akari config endpoints set --timeout 900    # 以後ずっと15分待つ
 | `AKARI_PERMISSION_MODE` | 既定の権限モード（`ask` / `auto-edit` / `full`） |
 | `AKARI_TOOLS_MODE` | 既定の道具の渡し方（`auto` / `native` / `prompted` / `both`） |
 | `AKARI_TIMEOUT` | 最初の応答までの待ち上限（秒）。設定より強く、`--timeout` より弱い |
+| `AKARI_REASONING` | 思考の量（`auto` / `off` / `low` / `medium` / `high`） |
 | `AKARI_DEBUG` | 例外のスタックトレースを出す（鍵は伏字化される） |
 | `NO_COLOR` | 色を使わない |
 

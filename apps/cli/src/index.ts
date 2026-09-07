@@ -67,6 +67,7 @@ program
   .option('--read-only', '読み取り系のツールだけを渡す')
   .option('--tools-mode <mode>', 'auto / native / prompted / both。判定を無視して渡し方を決める')
   .option('--timeout <秒>', 'この実行だけ、最初の応答までの待ち上限を変える')
+  .option('--think <量>', 'auto / off / low / medium / high。思考（reasoning）の量')
   .action(async (args: string[] | undefined, o) =>
     run(() => runCommand(args ?? [], { ...globals(), ...o, noTools: o.tools === false })),
   );
@@ -104,6 +105,7 @@ program
   .option('-t, --temperature <数値>', '0.0〜2.0')
   .option('--max-tokens <整数>', '生成の上限トークン数')
   .option('--timeout <秒>', 'この実行だけ、最初の応答までの待ち上限を変える')
+  .option('--think <量>', 'auto / off / low / medium / high。思考（reasoning）の量')
   .action(async (o) => run(() => chatCommand({ ...globals(), ...o })));
 
 program

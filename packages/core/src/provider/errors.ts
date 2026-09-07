@@ -29,7 +29,9 @@ export function classifyHttp(
     return {
       ...base,
       kind: 'model_not_found',
-      message: `${m}が見つかりません（404）。モデル一覧を取り直してください。`,
+      message:
+        `${m}が見つかりません（404）。akari models で名前を確かめてください。\n` +
+        'LM Studio では、サーバに読み込まれていないモデルもこの形で断られることがあります。',
     };
   }
   if (status === 429) {

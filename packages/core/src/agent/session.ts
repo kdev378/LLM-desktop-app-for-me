@@ -30,6 +30,7 @@ import {
 import type {
   Provider,
   ChatMessage,
+  ReasoningLevel,
   ProviderError,
   ToolCallRequest,
   Usage,
@@ -57,6 +58,8 @@ export type SessionOptions = {
    * docs/spec/02-provider.md
    */
   toolsMode?: ToolsMode;
+  /** 思考（reasoning）の量。docs/spec/02-provider.md */
+  reasoning?: ReasoningLevel;
   projectInstructions?: string;
   conversationInstructions?: string;
   /** 続きから始める場合の既存メッセージ。 */
@@ -236,6 +239,7 @@ export class Session {
           model: this.opts.model,
           messages: this.messages,
           ...(toolsMode === 'prompted' ? {} : { tools: toolDefinitions(this.tools) }),
+          ...(this.opts.reasoning ? { reasoning: this.opts.reasoning } : {}),
         },
         this.controller.signal,
       )) {
@@ -246,6 +250,9 @@ export class Session {
           yield { type: 'reasoning-delta', text: ev.text };
         } else if (ev.type === 'tool-call') {
           nativeCalls.push({ id: ev.id, name: ev.name, argumentsRaw: ev.argumentsRaw });
+        } else if (ev.type === 'notice') {
+          // 送ったものが通らなかったことを隠さない。設定が効いているふりをしない。
+          yield { type: 'notice', level: 'warn', message: ev.message };
         } else if (ev.type === 'finish') {
           usage = ev.usage;
         } else if (ev.type === 'error') {

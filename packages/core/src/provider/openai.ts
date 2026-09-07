@@ -13,6 +13,7 @@ import type {
   ChatRequest,
   FinishReason,
   ModelInfo,
+  OptionalParam,
   Provider,
   ProviderError,
   Usage,
@@ -31,6 +32,22 @@ const QUICK_TIMEOUT_MS = 10_000;
 const IDLE_TIMEOUT_MS = 120_000;
 
 type AbortReason = { akari: 'connect-timeout' | 'first-token-timeout' | 'idle-timeout' };
+
+/**
+ * サーバによっては 400 で拒否する任意パラメータ。拒否されたら1つずつ落として送り直す。
+ * 並びは落とす順序（影響の小さいものから）。
+ */
+const OPTIONAL_PARAMS = [
+  'stream_options',
+  'reasoning_effort',
+  'chat_template_kwargs',
+] as const satisfies readonly OptionalParam[];
+
+/** 落としたときに何が効かなくなるかを、利用者の言葉で言う。 */
+function describeDropped(name: OptionalParam): string {
+  if (name === 'stream_options') return 'トークン数の報告が出なくなります';
+  return '思考量の指定は効きません';
+}
 
 export type ProviderOptions = {
   logger?: Logger;
@@ -192,14 +209,18 @@ class OpenAiCompatibleProvider implements Provider {
     if (lastError) yield { type: 'error', error: lastError };
   }
 
-  /** 1回分の呼び出し。stream_options 非対応サーバへの再送はここで1度だけ行う。 */
+  /**
+   * 1回分の呼び出し。任意パラメータを理解しないサーバへの再送をここで行う。
+   * 落とすたびに1回だけ送り直す。落としたことは黙らず、呼び出し側へ notice で伝える。
+   */
   private async *chatOnce(
     req: ChatRequest,
     signal?: AbortSignal,
   ): AsyncGenerator<ChatEvent, void, void> {
-    let includeUsage = true;
-    for (let pass = 0; pass < 2; pass++) {
-      const body = buildRequestBody(req, includeUsage);
+    const dropped = new Set<OptionalParam>();
+    // 落とせる数だけ再送の機会がある（+1 が最初の1回）。
+    for (let pass = 0; pass < OPTIONAL_PARAMS.length + 1; pass++) {
+      const body = buildRequestBody(req, true, dropped);
       // 応答ヘッダまでと最初のトークンまでを、ひとつの持ち時間で見る。
       // 分けると「10秒で接続打ち切り」がモデルの読み込み待ちに当たってしまう。
       const timer = withTimeout(signal, this.ep.timeoutMs, { akari: 'first-token-timeout' });
@@ -220,17 +241,25 @@ class OpenAiCompatibleProvider implements Provider {
       if (!res.ok) {
         timer.clear();
         const text = await res.text().catch(() => '');
-        // stream_options を理解しないサーバへの1回だけの再送
-        if (
-          includeUsage &&
-          (res.status === 400 || res.status === 422) &&
-          /stream_options/i.test(text)
-        ) {
-          this.log?.warn('provider.streamOptionsUnsupported', {
+        // 理解されなかった任意パラメータを1つ落として送り直す。
+        // 送っていないものは落とせない（無限に回らない）。
+        const reject =
+          res.status === 400 || res.status === 422
+            ? OPTIONAL_PARAMS.find(
+                (name) => !dropped.has(name) && name in body && new RegExp(name, 'i').test(text),
+              )
+            : undefined;
+        if (reject) {
+          this.log?.warn('provider.optionalParamRejected', {
             endpointId: this.endpointId,
+            param: reject,
             status: res.status,
           });
-          includeUsage = false;
+          dropped.add(reject);
+          yield {
+            type: 'notice',
+            message: `この接続先は ${reject} を受け付けませんでした。外して送り直します（${describeDropped(reject)}）。`,
+          };
           continue;
         }
         yield {
@@ -514,7 +543,15 @@ type OpenAiChunk = {
   error?: unknown;
 };
 
-export function buildRequestBody(req: ChatRequest, includeUsage: boolean): Record<string, unknown> {
+/**
+ * リクエストの本体を組み立てる。`dropped` に入っている任意パラメータは載せない。
+ * サーバが理解しなかったものを落として送り直すため（docs/spec/02-provider.md）。
+ */
+export function buildRequestBody(
+  req: ChatRequest,
+  includeUsage: boolean,
+  dropped: ReadonlySet<OptionalParam> = new Set(),
+): Record<string, unknown> {
   const body: Record<string, unknown> = {
     model: req.model,
     stream: true,
@@ -532,7 +569,7 @@ export function buildRequestBody(req: ChatRequest, includeUsage: boolean): Recor
       return out;
     }),
   };
-  if (includeUsage) body.stream_options = { include_usage: true };
+  if (includeUsage && !dropped.has('stream_options')) body.stream_options = { include_usage: true };
   if (req.tools && req.tools.length > 0) {
     body.tools = req.tools.map((t) => ({
       type: 'function',
@@ -544,6 +581,14 @@ export function buildRequestBody(req: ChatRequest, includeUsage: boolean): Recor
   if (req.maxTokens !== undefined && req.maxTokens !== null) body.max_tokens = req.maxTokens;
   if (req.stop && req.stop.length > 0) body.stop = req.stop;
   if (req.seed !== undefined) body.seed = req.seed;
+  // 思考量。off はテンプレート側の切り替え、それ以外は OpenAI 系の口。
+  // どちらも理解しないサーバがあるので、拒否されたら落として送り直す。
+  if (req.reasoning === 'off') {
+    if (!dropped.has('chat_template_kwargs'))
+      body.chat_template_kwargs = { enable_thinking: false };
+  } else if (req.reasoning !== undefined) {
+    if (!dropped.has('reasoning_effort')) body.reasoning_effort = req.reasoning;
+  }
   return body;
 }
 

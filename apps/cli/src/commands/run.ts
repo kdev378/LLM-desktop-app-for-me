@@ -13,7 +13,14 @@ import {
   type PermissionMode,
   type ToolsMode,
 } from '@akari/core';
-import { createContext, pickEndpoint, pickModel, persist, type GlobalOptions } from '../context.js';
+import {
+  createContext,
+  pickEndpoint,
+  pickModel,
+  pickReasoning,
+  persist,
+  type GlobalOptions,
+} from '../context.js';
 import { c, out, write, note, isInteractive, formatDuration } from '../term.js';
 import { ExitError, EXIT } from '../exit.js';
 
@@ -34,6 +41,7 @@ export type RunOptions = GlobalOptions & {
   readOnly?: boolean;
   toolsMode?: string;
   timeout?: string;
+  think?: string;
 };
 
 export async function runCommand(promptArgs: string[], opts: RunOptions): Promise<void> {
@@ -114,6 +122,8 @@ export async function runCommand(promptArgs: string[], opts: RunOptions): Promis
   // none は「対応していない」ではなく「測れなかった」。両対応なら試せる。
   const effectiveMode: ToolsMode = toolsMode.mode === 'none' ? 'both' : toolsMode.mode;
 
+  const reasoning = pickReasoning(opts.think, ctx.config.generation.reasoning);
+
   const maxSteps = opts.maxSteps !== undefined ? Number(opts.maxSteps) : ctx.config.agent.maxSteps;
   if (!Number.isInteger(maxSteps) || maxSteps < 1 || maxSteps > 200) {
     throw new ExitError(EXIT.usage, '--max-steps は 1〜200 の整数で指定してください。');
@@ -127,6 +137,7 @@ export async function runCommand(promptArgs: string[], opts: RunOptions): Promis
     toolNames,
     maxSteps,
     toolsMode: effectiveMode,
+    ...(reasoning ? { reasoning } : {}),
     limits: {
       commandTimeoutMs: ctx.config.agent.commandTimeoutMs,
       toolOutputLimitBytes: ctx.config.agent.toolOutputLimitBytes,

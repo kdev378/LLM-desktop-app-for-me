@@ -11,6 +11,8 @@ export type FakeBehavior =
   | { kind: 'toolCall'; name: string; argChunks: string[] }
   | { kind: 'status'; status: number; body: string }
   | { kind: 'rejectStreamOptions'; then: FakeBehavior }
+  /** 指定した任意パラメータが本体にある限り 400 を返す。無くなったら then を返す。 */
+  | { kind: 'rejectParam'; param: string; then: FakeBehavior }
   | { kind: 'notSse'; body: string; contentType?: string }
   | { kind: 'jsonCompletion'; content: string }
   | { kind: 'cutOff'; chunks: string[] }
@@ -120,6 +122,16 @@ function handleChat(
       res.writeHead(behavior.status, { 'content-type': 'application/json' });
       res.end(behavior.body);
       return;
+
+    case 'rejectParam': {
+      if (body && typeof body === 'object' && behavior.param in (body as object)) {
+        res.writeHead(400, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: `unknown field '${behavior.param}'` } }));
+        return;
+      }
+      handleChat(res, behavior.then, body, advance);
+      return;
+    }
 
     case 'rejectStreamOptions': {
       const hasStreamOptions = !!(body as { stream_options?: unknown })?.stream_options;
