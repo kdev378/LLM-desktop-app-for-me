@@ -121,7 +121,12 @@ export const runCommandTool: ToolSpec = {
         ok: false,
         errorKind: 'timeout',
         summary: `タイムアウト（${Math.round(timeoutMs / 1000)}秒）`,
-        content: `コマンドが ${Math.round(timeoutMs / 1000)} 秒を超えたため終了させました。\n\n${body.text}`,
+        // 打ち切っただけで、失敗したとは限らない。伸ばす手があることを伝える。
+        content:
+          `コマンドが ${Math.round(timeoutMs / 1000)} 秒を超えたため終了させました。\n` +
+          `時間のかかるコマンドなら、timeoutMs を大きくして呼び直せます` +
+          `（例: {"command": ${JSON.stringify(a.command)}, "timeoutMs": ${Math.min(timeoutMs * 4, 1_800_000)}}）。\n\n` +
+          body.text,
       };
     }
     if (result.aborted) {

@@ -97,7 +97,7 @@ export function addEndpoint(
     baseUrl: input.baseUrl,
     apiKeyRef: input.apiKeyRef ?? null,
     defaultModel: input.defaultModel ?? null,
-    timeoutMs: input.timeoutMs ?? 120000,
+    timeoutMs: input.timeoutMs ?? 300000,
   });
   if (!parsed.success) {
     throw new AkariError('endpoint.invalid', '接続先の内容が不正です。', {

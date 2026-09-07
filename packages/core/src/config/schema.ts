@@ -53,7 +53,12 @@ export const endpointSchema = z.object({
   apiKeyRef: z.string().nullable().default(null),
   defaultModel: z.string().nullable().default(null),
   headers: z.record(z.string()).default({}),
-  timeoutMs: z.number().int().min(1000).max(600000).default(120000),
+  /**
+   * リクエストを出してから最初のトークンが来るまでの上限。
+   * ローカルのサーバはモデルの読み込みと入力の処理を先に済ませるため、
+   * 小さいモデルでも数分かかることがある。
+   */
+  timeoutMs: z.number().int().min(1000).max(3600000).default(300000),
   capabilities: capabilitiesSchema.default({}),
   /** 外部（localhost以外）への送信に同意済みか。docs/spec/09-security.md */
   externalConsent: z.boolean().default(false),

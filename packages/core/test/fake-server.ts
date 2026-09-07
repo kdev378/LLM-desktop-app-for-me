@@ -14,6 +14,8 @@ export type FakeBehavior =
   | { kind: 'notSse'; body: string; contentType?: string }
   | { kind: 'jsonCompletion'; content: string }
   | { kind: 'cutOff'; chunks: string[] }
+  /** 応答ヘッダを返すまで待つ。ローカルサーバがモデルを読み込んでいる間の挙動。 */
+  | { kind: 'slowHeaders'; delayMs: number; then: FakeBehavior }
   | { kind: 'hang' };
 
 export type FakeServer = {
@@ -105,6 +107,15 @@ function handleChat(
   advance: () => void,
 ): void {
   switch (behavior.kind) {
+    case 'slowHeaders': {
+      const timer = setTimeout(
+        () => handleChat(res, behavior.then, body, advance),
+        behavior.delayMs,
+      );
+      res.on('close', () => clearTimeout(timer));
+      return;
+    }
+
     case 'status':
       res.writeHead(behavior.status, { 'content-type': 'application/json' });
       res.end(behavior.body);

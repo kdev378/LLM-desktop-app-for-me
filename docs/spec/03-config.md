@@ -38,7 +38,7 @@
       "apiKeyRef": null,
       "defaultModel": "qwen2.5-coder:14b",
       "headers": {},
-      "timeoutMs": 120000,
+      "timeoutMs": 300000,
       "capabilities": { "tools": "auto", "vision": "auto", "usageReported": false, "streamsToolCalls": false }
     }
   ],
@@ -68,7 +68,7 @@
 | 名前 | 型 / 有効範囲 | 既定 | 適用範囲 | 効果 |
 |---|---|---|---|---|
 | `endpoints[].baseUrl` | URL文字列、`http`/`https` のみ | — | 接続先 | 全リクエストの前置き。末尾スラッシュは除去して保存 |
-| `endpoints[].timeoutMs` | 1000〜600000 | 120000 | 接続先 | 最初のトークンまでの待ち上限 |
+| `endpoints[].timeoutMs` | 1000〜3600000 | 300000 | 接続先 | リクエストから最初のトークンまでの待ち上限。`--timeout` / `AKARI_TIMEOUT` で1回だけ上書きできる |
 | `endpoints[].capabilities.byModel` | モデル名→判定結果 | `{}` | 接続先 | モデルごとのツール対応。行き来しても判定し直さないため |
 | `generation.temperature` | 0.0〜2.0 | 0.7 | 全体（会話で上書き可） | 大きいほど散らばる |
 | `generation.topP` | 0.0〜1.0 | 1.0 | 同上 | — |

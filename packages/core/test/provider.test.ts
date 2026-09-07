@@ -211,3 +211,43 @@ test('モデル一覧はサーバの順序を保つ（並べ替えない）', as
   );
   await s.close();
 });
+
+// ---------------- 待ち時間（ローカルサーバのモデル読み込み） ----------------
+
+/**
+ * ローカルのサーバは、モデルを読み込み終わるまで応答ヘッダを返さないことがある。
+ * その待ちを「接続できない」と切ってはいけない。
+ * 仕様: docs/spec/02-provider.md「段階別のタイムアウト」
+ */
+
+test('応答ヘッダが遅れても、接続先の待ち上限までは待つ', async () => {
+  const s = await startFakeServer({
+    kind: 'slowHeaders',
+    delayMs: 300,
+    then: { kind: 'text', chunks: ['読み込めた'] },
+  });
+  const events = await collect(createProvider(endpoint(s.url, { timeoutMs: 3000 })).chat(req));
+  const text = events
+    .filter((e) => e.type === 'text-delta')
+    .map((e) => e.text)
+    .join('');
+  assert.equal(text, '読み込めた', 'モデルの読み込み待ちで切らない');
+  assert.ok(!events.some((e) => e.type === 'error'), 'エラーにしない');
+  await s.close();
+});
+
+test('待ち上限を超えたら、延ばし方を添えて止める', async () => {
+  const s = await startFakeServer({
+    kind: 'slowHeaders',
+    delayMs: 5000,
+    then: { kind: 'text', chunks: ['間に合わない'] },
+  });
+  const events = await collect(createProvider(endpoint(s.url, { timeoutMs: 1000 })).chat(req));
+  const err = events.at(-1)!;
+  assert.equal(err.type, 'error');
+  const e = err.error as Record<string, string>;
+  assert.equal(e.kind, 'unreachable');
+  assert.match(e.message, /1 秒以内に来ませんでした/, '実際の上限を出す');
+  assert.match(e.message, /config endpoints set --timeout/, '直し方を出す');
+  await s.close();
+});

@@ -9,6 +9,7 @@ export type ChatOptions = GlobalOptions & {
   system?: string;
   temperature?: string;
   maxTokens?: string;
+  timeout?: string;
 };
 
 /**
@@ -17,7 +18,7 @@ export type ChatOptions = GlobalOptions & {
  */
 export async function chatCommand(opts: ChatOptions): Promise<void> {
   const ctx = await createContext(opts);
-  const endpoint = await pickEndpoint(ctx, opts.endpoint);
+  const endpoint = await pickEndpoint(ctx, opts.endpoint, opts.timeout);
   const provider = createProvider(endpoint, { logger: ctx.logger });
   const model = await pickModel(endpoint, opts.model, async () =>
     (await provider.listModels()).map((m) => m.id),

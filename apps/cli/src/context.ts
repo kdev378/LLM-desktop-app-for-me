@@ -57,14 +57,35 @@ export async function createContext(opts: GlobalOptions): Promise<CliContext> {
 }
 
 /** 環境変数 → 引数の順に強くなる（docs/spec/03-config.md の優先順位）。 */
-export async function pickEndpoint(ctx: CliContext, name?: string): Promise<ResolvedEndpoint> {
+export async function pickEndpoint(
+  ctx: CliContext,
+  name?: string,
+  timeout?: string,
+): Promise<ResolvedEndpoint> {
   const chosen = name ?? process.env.AKARI_ENDPOINT;
   if (ctx.config.endpoints.length === 0) {
     throw new ExitError(EXIT.usage, '接続先が1つも登録されていません。', {
       hint: 'akari config endpoints add --name "ローカル" --url http://localhost:11434/v1',
     });
   }
-  return resolveEndpoint(ctx.config, chosen ?? null, ctx.root);
+  const endpoint = await resolveEndpoint(ctx.config, chosen ?? null, ctx.root);
+  const timeoutMs = pickTimeoutMs(timeout);
+  // その1回だけ待ち時間を延ばす。設定は書き換えない。
+  return timeoutMs === null ? endpoint : { ...endpoint, timeoutMs };
+}
+
+/** --timeout / AKARI_TIMEOUT（秒）。指定が無ければ null。 */
+function pickTimeoutMs(timeout?: string): number | null {
+  const raw = timeout ?? process.env.AKARI_TIMEOUT;
+  if (raw === undefined || raw === '') return null;
+  const seconds = Number(raw);
+  if (!Number.isFinite(seconds) || seconds < 1 || seconds > 3600) {
+    throw new ExitError(
+      EXIT.usage,
+      `--timeout は 1〜3600 の秒数で指定してください（受け取った値: ${raw}）。`,
+    );
+  }
+  return Math.round(seconds * 1000);
 }
 
 /** モデルの決め方: 引数 > 環境変数 > 接続先の既定 > サーバの先頭。 */

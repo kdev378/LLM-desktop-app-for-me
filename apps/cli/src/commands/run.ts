@@ -33,6 +33,7 @@ export type RunOptions = GlobalOptions & {
   noTools?: boolean;
   readOnly?: boolean;
   toolsMode?: string;
+  timeout?: string;
 };
 
 export async function runCommand(promptArgs: string[], opts: RunOptions): Promise<void> {
@@ -59,7 +60,7 @@ export async function runCommand(promptArgs: string[], opts: RunOptions): Promis
     });
   }
 
-  const endpoint = await pickEndpoint(ctx, opts.endpoint);
+  const endpoint = await pickEndpoint(ctx, opts.endpoint, opts.timeout);
   const provider = createProvider(endpoint, { logger: ctx.logger });
   const model = await pickModel(endpoint, opts.model, async () =>
     (await provider.listModels()).map((m) => m.id),

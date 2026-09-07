@@ -136,6 +136,47 @@ test('機能判定が結果を保存する', async () => {
   assert.ok(cfg.endpoints[0].capabilities.probedAt);
 });
 
+test('接続先の待ち上限を後から変えられる。判定結果は消えない', async () => {
+  const r = await akari(['config', 'endpoints', 'set', '--timeout', '600']);
+  assert.equal(r.code, 0);
+  assert.match(r.stdout, /600 秒/);
+  const cfg = JSON.parse(await fs.readFile(path.join(home, 'config.json'), 'utf8')) as {
+    endpoints: Array<{
+      id: string;
+      timeoutMs: number;
+      capabilities: { tools: string; byModel?: Record<string, unknown> };
+    }>;
+  };
+  assert.equal(cfg.endpoints[0].timeoutMs, 600000);
+  // 消して足し直すと判定結果まで失われる。それを避けるための口である以上、ここは残る
+  assert.equal(cfg.endpoints[0].capabilities.tools, 'native');
+  assert.ok(Object.keys(cfg.endpoints[0].capabilities.byModel ?? {}).length > 0);
+});
+
+test('接続先の set は、変えるものが無ければ何もせず終了コード2', async () => {
+  const r = await akari(['config', 'endpoints', 'set']);
+  assert.equal(r.code, 2);
+  assert.match(r.stderr + r.stdout, /変えるもの/);
+});
+
+test('run の --timeout は設定を書き換えない', async () => {
+  const before = JSON.parse(await fs.readFile(path.join(home, 'config.json'), 'utf8')) as {
+    endpoints: Array<{ timeoutMs: number }>;
+  };
+  const r = await akari(['chat', '-p', 'やあ', '--timeout', '30']);
+  assert.equal(r.code, 0);
+  const after = JSON.parse(await fs.readFile(path.join(home, 'config.json'), 'utf8')) as {
+    endpoints: Array<{ timeoutMs: number }>;
+  };
+  assert.equal(after.endpoints[0].timeoutMs, before.endpoints[0].timeoutMs);
+});
+
+test('--timeout に範囲外の値を渡すと終了コード2', async () => {
+  const r = await akari(['chat', '-p', 'やあ', '--timeout', '0']);
+  assert.equal(r.code, 2);
+  assert.match(r.stderr + r.stdout, /1〜3600/);
+});
+
 test('範囲外の設定は変更されず、終了コード2で有効範囲を示す', async () => {
   const before = await akari(['config', 'get', 'agent.maxSteps']);
   const r = await akari(['config', 'set', 'agent.maxSteps', '9999']);

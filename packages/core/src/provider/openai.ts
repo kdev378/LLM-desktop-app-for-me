@@ -20,8 +20,13 @@ import type {
 import type { ResolvedEndpoint } from '../config/endpoints.js';
 import type { Logger } from '../diagnostics/logger.js';
 
-/** 接続確立（ヘッダ受信）までの上限。 */
-const CONNECT_TIMEOUT_MS = 10_000;
+/**
+ * モデル一覧のような、待たされる理由の無いリクエストの上限。
+ * 生成リクエストにはこれを使わない。ローカルのサーバは、
+ * モデルを読み込み終わるまで応答ヘッダすら返さないことがあり、
+ * その待ち時間は「繋がらない」ではなく「読み込み中」だから。
+ */
+const QUICK_TIMEOUT_MS = 10_000;
 /** トークン間の上限。これを超えたら壊れているとみなす。 */
 const IDLE_TIMEOUT_MS = 120_000;
 
@@ -72,7 +77,8 @@ class OpenAiCompatibleProvider implements Provider {
       res = await this.doFetch(url, {
         method: 'GET',
         headers: this.headers(),
-        signal: withTimeout(signal, this.ep.timeoutMs, { akari: 'connect-timeout' }).signal,
+        // 一覧は待たされる理由が無い。生成の持ち時間を当てない。
+        signal: withTimeout(signal, QUICK_TIMEOUT_MS, { akari: 'connect-timeout' }).signal,
       });
     } catch (err) {
       throw toError(
@@ -194,7 +200,9 @@ class OpenAiCompatibleProvider implements Provider {
     let includeUsage = true;
     for (let pass = 0; pass < 2; pass++) {
       const body = buildRequestBody(req, includeUsage);
-      const timer = withTimeout(signal, CONNECT_TIMEOUT_MS, { akari: 'connect-timeout' });
+      // 応答ヘッダまでと最初のトークンまでを、ひとつの持ち時間で見る。
+      // 分けると「10秒で接続打ち切り」がモデルの読み込み待ちに当たってしまう。
+      const timer = withTimeout(signal, this.ep.timeoutMs, { akari: 'first-token-timeout' });
       let res: Response;
       try {
         res = await this.doFetch(this.url('/chat/completions'), {
@@ -462,8 +470,11 @@ class OpenAiCompatibleProvider implements Provider {
   private classifyAbort(err: unknown, reason: AbortReason | null, model: string): ProviderError {
     if ((err as { name?: string })?.name === 'AbortError' && reason) {
       const map: Record<AbortReason['akari'], string> = {
-        'connect-timeout': `サーバが ${CONNECT_TIMEOUT_MS / 1000} 秒以内に応答しませんでした。`,
-        'first-token-timeout': `最初の応答が ${Math.round(this.ep.timeoutMs / 1000)} 秒以内に来ませんでした。モデルの読み込みに時間がかかっている可能性があります。`,
+        'connect-timeout': `サーバが ${QUICK_TIMEOUT_MS / 1000} 秒以内に応答しませんでした。`,
+        'first-token-timeout':
+          `最初の応答が ${Math.round(this.ep.timeoutMs / 1000)} 秒以内に来ませんでした。` +
+          'モデルの読み込みや、長い入力の処理に時間がかかっている可能性があります。\n' +
+          `待ち時間を延ばすには: akari config endpoints set --timeout ${Math.round((this.ep.timeoutMs / 1000) * 2)}`,
         'idle-timeout': `応答が ${IDLE_TIMEOUT_MS / 1000} 秒途切れました。`,
       };
       const kind = reason.akari === 'idle-timeout' ? 'incompatible' : 'unreachable';

@@ -13,6 +13,7 @@ import {
   configSet,
   endpointsList,
   endpointsAdd,
+  endpointsSet,
   endpointsRemove,
   endpointsUse,
   endpointsProbe,
@@ -65,6 +66,7 @@ program
   .option('--no-tools', 'ツールを渡さない（純粋な生成）')
   .option('--read-only', '読み取り系のツールだけを渡す')
   .option('--tools-mode <mode>', 'auto / native / prompted / both。判定を無視して渡し方を決める')
+  .option('--timeout <秒>', 'この実行だけ、最初の応答までの待ち上限を変える')
   .action(async (args: string[] | undefined, o) =>
     run(() => runCommand(args ?? [], { ...globals(), ...o, noTools: o.tools === false })),
   );
@@ -101,6 +103,7 @@ program
   .option('-s, --system <文>', 'システムプロンプト')
   .option('-t, --temperature <数値>', '0.0〜2.0')
   .option('--max-tokens <整数>', '生成の上限トークン数')
+  .option('--timeout <秒>', 'この実行だけ、最初の応答までの待ち上限を変える')
   .action(async (o) => run(() => chatCommand({ ...globals(), ...o })));
 
 program
@@ -140,8 +143,18 @@ endpoints
   .option('--model <名前>', '既定のモデル')
   .option('--key <値>', 'APIキー（credentials.json に平文で保存されます）')
   .option('--key-env <変数名>', 'APIキーを環境変数から読む（外部APIではこちらを推奨）')
-  .option('--timeout <秒>', '最初の応答までの待ち上限（既定120）')
+  .option('--timeout <秒>', '最初の応答までの待ち上限（既定300）')
   .action(async (o) => run(() => endpointsAdd({ ...globals(), ...o })));
+endpoints
+  .command('set [名前|ID]')
+  .description('既にある接続先を書き換える（省略時は選択中のもの）')
+  .option('--name <名前>', '表示名を変える')
+  .option('--url <ベースURL>', 'ベースURLを変える')
+  .option('--model <名前>', '既定のモデルを変える')
+  .option('--key <値>', 'APIキー（credentials.json に平文で保存されます）')
+  .option('--key-env <変数名>', 'APIキーを環境変数から読む')
+  .option('--timeout <秒>', '最初の応答までの待ち上限')
+  .action(async (n, o) => run(() => endpointsSet(n, { ...globals(), ...o })));
 endpoints
   .command('rm <名前|ID>')
   .description('接続先を削除する')

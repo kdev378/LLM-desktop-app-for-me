@@ -152,6 +152,90 @@ export async function endpointsAdd(
   out(c.dim('接続を確認するには: akari doctor'));
 }
 
+/**
+ * 既にある接続先を書き換える。
+ * 消して足し直すと ID と判定結果（capabilities.byModel）まで失われるため、
+ * 「待ち時間だけ延ばしたい」に応えられる口が要る。
+ */
+export async function endpointsSet(
+  nameOrId: string | undefined,
+  opts: GlobalOptions & {
+    name?: string;
+    url?: string;
+    model?: string;
+    key?: string;
+    keyEnv?: string;
+    timeout?: string;
+  },
+): Promise<void> {
+  const ctx = await createContext(opts);
+  if (opts.key && opts.keyEnv) {
+    throw new ExitError(EXIT.usage, '--key と --key-env は同時に使えません。');
+  }
+  const target = findEndpoint(ctx.config, nameOrId);
+  if (!target) {
+    throw new ExitError(
+      EXIT.usage,
+      nameOrId
+        ? `接続先 "${nameOrId}" が見つかりません。`
+        : '接続先がありません。まず akari config endpoints add で登録してください。',
+    );
+  }
+
+  const patch: Record<string, unknown> = {};
+  if (opts.timeout !== undefined) {
+    const timeoutMs = Number(opts.timeout) * 1000;
+    if (Number.isNaN(timeoutMs) || timeoutMs < 1000) {
+      throw new ExitError(EXIT.usage, '--timeout は 1 以上の秒数で指定してください。');
+    }
+    patch.timeoutMs = timeoutMs;
+  }
+  if (opts.url !== undefined) patch.baseUrl = opts.url;
+  if (opts.model !== undefined) patch.defaultModel = opts.model;
+  if (opts.name !== undefined) {
+    if (ctx.config.endpoints.some((e) => e.name === opts.name && e.id !== target.id)) {
+      throw new ExitError(EXIT.usage, `同じ名前の接続先 "${opts.name}" が既にあります。`);
+    }
+    patch.name = opts.name;
+  }
+  if (opts.keyEnv !== undefined) patch.apiKeyRef = `env:${opts.keyEnv}`;
+  if (opts.key !== undefined) patch.apiKeyRef = endpointKeyRef(opts.name ?? target.name);
+
+  if (Object.keys(patch).length === 0) {
+    throw new ExitError(EXIT.usage, '変えるものがありません。', {
+      hint: '--timeout / --url / --model / --name / --key / --key-env のいずれかを指定してください。',
+    });
+  }
+
+  const next = updateEndpoint(ctx.config, target.id, patch);
+  // 保存する前に検証する。不正なら何も変えずに終わる。
+  const parsed = configSchema.safeParse(next);
+  if (!parsed.success) {
+    throw new ExitError(EXIT.usage, '設定できない値です。設定は変更していません。', {
+      detail: describeIssues(parsed.error).join('\n'),
+    });
+  }
+  if (opts.key !== undefined) {
+    await setKey(String(patch.apiKeyRef), opts.key, ctx.root);
+  }
+  await persist(ctx, parsed.data);
+
+  const after = findEndpoint(parsed.data, target.id)!;
+  out(`接続先 "${after.name}" を更新しました。`);
+  for (const [key, label] of [
+    ['baseUrl', 'URL'],
+    ['defaultModel', '既定のモデル'],
+  ] as const) {
+    if (patch[key] !== undefined) out(c.dim(`  ${label}: ${String(after[key] ?? '(なし)')}`));
+  }
+  if (patch.timeoutMs !== undefined) {
+    out(c.dim(`  最初の応答までの待ち上限: ${Math.round(after.timeoutMs / 1000)} 秒`));
+  }
+  if (patch.apiKeyRef !== undefined) out(c.dim('  APIキーの参照を変えました。'));
+  // 判定結果は残す。待ち時間を変えただけで測り直させない。
+  out(c.dim('\n判定結果（ツール対応・文脈長）はそのまま残っています。'));
+}
+
 export async function endpointsRemove(nameOrId: string, opts: GlobalOptions): Promise<void> {
   const ctx = await createContext(opts);
   const target = findEndpoint(ctx.config, nameOrId);

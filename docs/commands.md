@@ -87,6 +87,7 @@ akari run [オプション] [プロンプト...]
 | `--no-tools` | — | 道具を渡さない。**ファイルは一切変わらない** |
 | `--read-only` | — | 読み取り系の道具だけ渡す |
 | `--tools-mode <mode>` | `auto` | 道具の渡し方。`auto` / `native` / `prompted` / `both`（後述） |
+| `--timeout <秒>` | 300 | この実行だけ、最初の応答までの待ち上限を変える。設定は書き換えない |
 
 ### 権限モード
 
@@ -360,7 +361,27 @@ akari config endpoints add --name <名前> --url <ベースURL> [オプション
 | `--model <名前>` | | この接続先の既定モデル |
 | `--key <値>` | | APIキー。**`credentials.json` に平文で保存される** |
 | `--key-env <変数名>` | | APIキーを環境変数から読む。外部APIではこちらを推奨 |
-| `--timeout <秒>` | | 最初の応答までの待ち上限（既定120） |
+| `--timeout <秒>` | | 最初の応答までの待ち上限（既定300） |
+
+### `set`
+
+既にある接続先を書き換える。**接続先のIDと判定結果は残る。**
+
+```sh
+akari config endpoints set [名前|ID] [オプション]
+```
+
+名前を省略すると、いま選択中の接続先を変える。
+オプションは `add` と同じ（`--name` / `--url` / `--model` / `--key` / `--key-env` / `--timeout`）。
+指定したものだけが変わる。
+
+```sh
+akari config endpoints set --timeout 900     # 応答を15分待つ
+akari config endpoints set --model qwen3-4b  # 既定のモデルを変える
+```
+
+**待ち時間を変えたいだけなら `rm` して `add` し直さないこと。**
+IDが変わり、モデルごとのツール判定と文脈長の記録まで消える。
 
 サーバごとの既定URL:
 
@@ -421,6 +442,32 @@ akari config endpoints probe [名前|ID] [-m <モデル>] [--context <トーク�
 
 ---
 
+## 待ち時間（遅い・タイムアウトするとき）
+
+時間の上限は3つある。**どれも別のもの**なので、出たメッセージで見分ける。
+
+| メッセージ | 何の上限か | 既定 | 変え方 |
+|---|---|---|---|
+| `最初の応答が N 秒以内に来ませんでした` | リクエストを出してから最初のトークンが返るまで | 300秒 | `--timeout` / `AKARI_TIMEOUT` / `config endpoints set --timeout` |
+| `応答が 120 秒途切れました` | トークンとトークンの間 | 120秒 | 変えられない（ここまで空くならサーバが壊れている） |
+| `コマンドが N 秒を超えたため終了させました` | `run_command` が動かしたコマンド | 120秒 | `config set agent.commandTimeoutMs <ミリ秒>` |
+| `サーバが 10 秒以内に応答しませんでした` | モデル一覧（`/models`）の取得 | 10秒 | 変えられない |
+
+**最初のトークンまでが長くなるのは異常ではない。** ローカルのサーバは、
+モデルの読み込みと入力の処理を終えてから最初のトークンを出す。
+`run` は道具の定義8個と指示ファイルと履歴を毎回送るので、`chat` よりここが長い。
+手元の機械で数B級のモデルを動かすなら、初回に数分かかることがある。
+
+```sh
+akari run --timeout 900 "直して"            # この1回だけ15分待つ
+akari config endpoints set --timeout 900    # 以後ずっと15分待つ
+```
+
+`run_command` の上限は、モデル自身が呼び出しごとに `timeoutMs` を渡して伸ばせる。
+打ち切られたときは、その旨と伸ばし方がモデルへ返る。
+
+---
+
 ## 終了コード
 
 | コード | 意味 |
@@ -444,6 +491,7 @@ akari config endpoints probe [名前|ID] [-m <モデル>] [--context <トーク�
 | `AKARI_MODEL` | 既定のモデル |
 | `AKARI_PERMISSION_MODE` | 既定の権限モード（`ask` / `auto-edit` / `full`） |
 | `AKARI_TOOLS_MODE` | 既定の道具の渡し方（`auto` / `native` / `prompted` / `both`） |
+| `AKARI_TIMEOUT` | 最初の応答までの待ち上限（秒）。設定より強く、`--timeout` より弱い |
 | `AKARI_DEBUG` | 例外のスタックトレースを出す（鍵は伏字化される） |
 | `NO_COLOR` | 色を使わない |
 

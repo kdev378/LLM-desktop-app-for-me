@@ -64,10 +64,14 @@ akari config list                       # 現在の設定（鍵は伏せる）
 akari config get agent.maxSteps
 akari config set agent.maxSteps 40
 akari config endpoints add --name "ローカル" --url http://localhost:11434/v1
+akari config endpoints set --timeout 600  # 既にある接続先を書き換える
 akari config endpoints probe ep_local   # 機能を再判定
 akari config endpoints rm ep_local
 ```
 `set` は型と範囲を検証する。不正なら**変更せずに**、有効な範囲を示して終了コード 2 で終わる。
+
+`endpoints set` は接続先の ID と判定結果（`capabilities`）を保つ。
+`rm` して `add` し直すと、待ち時間を変えたいだけでモデルごとの判定まで失われるため。
 
 ### `akari serve`
 ハーネスAPIを立てる（`12-harness-api.md`）。
