@@ -199,6 +199,12 @@ test('到達できない接続先は終了コード4', async () => {
   const r = await akari(['-e', '落ちてる', 'models']);
   assert.equal(r.code, 4);
   assert.match(r.stderr, /接続できません/);
+  // どのコマンドでも同じ番号にする。models だけ 4 で chat と run が 1 では、
+  // 呼び出し側（ハーネスAPIや上位のエージェント）が原因を判別できない。
+  const chat = await akari(['-e', '落ちてる', 'chat', '-p', 'やあ']);
+  assert.equal(chat.code, 4, 'chat も 4');
+  const run = await akari(['-e', '落ちてる', 'run', '--permission', 'full', 'やって']);
+  assert.equal(run.code, 4, 'run も 4');
 });
 
 test('未実装のコマンドは、あるように見せず終了コード2', async () => {

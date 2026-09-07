@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { Command, CommanderError } from 'commander';
-import { isAkariError, messageOf, redact } from '@akari/core';
+import { isAkariError, messageOf, redact, getProviderError } from '@akari/core';
 import { VERSION, COMMIT } from './version.js';
 import { ExitError, EXIT } from './exit.js';
 import { setColor, errorLine, hintLine, out, c } from './term.js';
@@ -223,6 +223,17 @@ async function run(fn: () => Promise<void>): Promise<void> {
     }
     if ((err as Error)?.name === 'AbortError') {
       process.exitCode = EXIT.interrupted;
+      return;
+    }
+    // 「繋がらない」はどのコマンドで起きても 4。
+    // models だけ 4 で chat と run が 1 では、呼び出し側が原因を判別できない。
+    const pe = getProviderError(err);
+    if (pe) {
+      errorLine(pe.message);
+      if (pe.kind === 'unreachable') {
+        hintLine('サーバが起動しているか、URLが正しいかを確認してください。');
+      }
+      process.exitCode = pe.kind === 'unreachable' ? EXIT.unreachable : EXIT.runtime;
       return;
     }
     errorLine(messageOf(err));

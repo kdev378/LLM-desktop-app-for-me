@@ -28,7 +28,8 @@
 | 15 | [Web](15-web.md) | 検索、ページ取得、SSRF対策 | 外を見に行かせるとき |
 | 16 | [文脈](16-context.md) | 圧縮（決定/確認済み/棄却案/未解決/次の行動）、生の記録の検索 | 文脈が溢れるとき |
 
-実際に動くコマンドと引数の一覧は [`docs/commands.md`](../commands.md)
+実際に動くコマンドと引数の一覧は [`docs/commands.md`](../commands.md)、
+実機で確かめる手順は [`docs/testing.md`](../testing.md)
 （仕様ではなく、**今そうなっているもの**）。
 
 開発ルール（この仕様書とは別）は `AGENTS.md` を入口とする `context/` にある。
