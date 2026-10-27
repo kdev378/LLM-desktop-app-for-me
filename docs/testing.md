@@ -29,8 +29,11 @@ pnpm build     # apps/cli/dist/index.js ができる
 ```sh
 node apps/cli/dist/index.js …          # そのまま
 pnpm akari …                           # 同じ
-alias akari="node $PWD/apps/cli/dist/index.js"   # 以降 akari と書ける
+alias akari="node $PWD/apps/cli/dist/index.js"   # 以降 akari と書ける（このターミナルの間だけ）
 ```
+
+ターミナルを開き直しても `akari` と打てるようにするには、一度だけ `cd apps/cli && npm link && cd ../..`
+（詳しくは [getting-started.md の「準備」](getting-started.md#準備)）。
 
 以降このファイルでは `akari` と書く。
 

@@ -27,8 +27,28 @@ node apps/cli/dist/index.js --version   # 「0.1.0 (dev)」と出れば準備完
 git pull && pnpm install && pnpm build
 ```
 
-以降、`node apps/cli/dist/index.js` が `akari` コマンドにあたる。
-短くしたいなら、リポジトリの直下で `alias akari="node $PWD/apps/cli/dist/index.js"`。
+### `akari` と打てるようにする（一度だけ）
+
+```sh
+cd apps/cli && npm link && cd ../..
+akari --version          # どのフォルダからでも、ターミナルを開き直しても使える
+```
+
+`npm link` は、このリポジトリの組み立て結果を指す `akari` コマンドを置くだけ。
+以後 `pnpm build` し直せば、`akari` もそのまま新しくなる（`npm link` のやり直しは要らない）。
+やめるときは `npm unlink -g @akari/cli`。
+
+`npm link` が権限のエラーで失敗するなら（Node を公式のインストーラで入れた Mac など）、
+代わりに alias をシェルの設定に書く。リポジトリの直下で:
+
+```sh
+echo "alias akari=\"node $PWD/apps/cli/dist/index.js\"" >> ~/.zshrc   # bash なら ~/.bashrc
+source ~/.zshrc
+```
+
+`alias` をターミナルで打っただけだと、そのターミナルを閉じると消える。
+
+以降このファイルでは `akari` と書く（`node apps/cli/dist/index.js` と同じ）。
 
 ## 本物のローカルLLMに繋ぐ
 
