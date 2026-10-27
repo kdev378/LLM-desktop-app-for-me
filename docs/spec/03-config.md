@@ -44,6 +44,10 @@
   ],
   "activeEndpointId": "ep_local",
   "generation": { "temperature": 0.7, "topP": 1.0, "maxTokens": null },
+  "context": {
+    "mode": "auto", "compactAtRatio": 0.7, "compactAtTokens": 12000,
+    "keepRecentTurns": 3, "digestModel": null
+  },
   "agent": {
     "permissionMode": "ask",
     "toolsMode": "auto",

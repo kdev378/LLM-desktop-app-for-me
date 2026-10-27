@@ -145,6 +145,15 @@ export async function runCommand(promptArgs: string[], opts: RunOptions): Promis
     model,
     workspace,
     transcript: conversation.transcript,
+    // 文脈の管理（docs/spec/16-context.md）。文脈長はモデルごとの判定結果から
+    context: {
+      settings: ctx.config.context,
+      windowTokens: endpoint.capabilities.byModel?.[model]?.contextTokens ?? null,
+      endpointId: endpoint.id,
+    },
+    ...(conversation.source?.latestCompaction()
+      ? { compaction: conversation.source.latestCompaction()! }
+      : {}),
     ...(conversation.target
       ? {
           recorder: conversation.target.recorder({ model, endpointId: endpoint.id }),
@@ -255,6 +264,34 @@ export async function runCommand(promptArgs: string[], opts: RunOptions): Promis
           session.approve(ev.callId, decision);
           break;
         }
+        case 'compaction-start':
+          if (!ctx.json) {
+            if (lastWasText) {
+              out('');
+              lastWasText = false;
+            }
+            out(
+              c.magenta(
+                `  ⧉ 文脈が約${ev.beforeTokens.toLocaleString()}トークン${ev.estimated ? '（概算）' : ''}になったため、古い ${ev.turns} 手を圧縮しています…`,
+              ),
+            );
+          }
+          break;
+        case 'compaction-end':
+          if (!ctx.json) {
+            out(
+              c.magenta(
+                `  ⧉ 圧縮しました: 約${ev.afterTokens.toLocaleString()}トークン${ev.estimated ? '（概算）' : ''}。中身は akari digest で見られます`,
+              ),
+            );
+            if (ev.fallback)
+              out(
+                c.yellow(
+                  '    ! モデルが圧縮版を書けなかった分は、機械的な要約で残しています（劣った圧縮です）。',
+                ),
+              );
+          }
+          break;
         case 'notice':
           if (!ctx.json)
             out(ev.level === 'warn' ? c.yellow(`  ! ${ev.message}`) : c.dim(`  ${ev.message}`));
@@ -307,7 +344,7 @@ export async function runCommand(promptArgs: string[], opts: RunOptions): Promis
       silent: ctx.json,
     });
   }
-  if (endReason === 'error')
+  if (endReason === 'error' || endReason === 'context-full')
     throw new ExitError(EXIT.runtime, '実行が失敗しました。', { silent: true });
 }
 
@@ -381,6 +418,7 @@ function describeEnd(reason: string): string {
     error: 'エラーで停止',
     denied: '拒否により停止',
     loop: '同じ操作の繰り返しを検出して停止',
+    'context-full': '文脈に入りきらないため停止',
   };
   return map[reason] ?? reason;
 }

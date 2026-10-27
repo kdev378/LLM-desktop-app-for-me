@@ -10,6 +10,8 @@ type SessionOptions = {
   conversationId: string;
   recorder?: ConversationRecorder;   // やり取りの記録係（04-chat.md）。Session はファイルを知らない
   transcript?: TranscriptEntry[];     // 続きから始めるときの、これまでの生の記録（ID つき）
+  context?: { settings: ContextSettings; windowTokens: number | null; endpointId: string };  // 16-context.md
+  compaction?: Compaction;            // 続きから始めるときの、いちばん新しい圧縮の記録
   workspace: string | null;      // 作業フォルダの絶対パス。null ならツールなし
   tools: ToolName[];             // 許可するツール
   permissionMode: "ask" | "autoEdit" | "full";
@@ -55,7 +57,7 @@ type RunEvent =
   | { type: "step-end"; step: number; usage?: Usage }
   | { type: "compaction-start"; turns: number; beforeTokens: number; estimated: boolean }
   | { type: "compaction-end"; compactionId: string; afterTokens: number; fallback?: string }
-  | { type: "run-end"; reason: "done" | "aborted" | "max-steps" | "error" | "denied"; error?: unknown }
+  | { type: "run-end"; reason: "done" | "aborted" | "max-steps" | "error" | "denied" | "loop" | "context-full"; error?: unknown }
 ```
 
 `tool-output` を逐次流すのが重要。`npm test` が3分走る間、無反応にしない。

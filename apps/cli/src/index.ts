@@ -25,6 +25,7 @@ import {
   conversationsShowCommand,
   conversationsRmCommand,
 } from './commands/conversations.js';
+import { digestCommand, recallCommand } from './commands/context.js';
 
 /**
  * akari CLI。仕様: docs/spec/10-cli.md
@@ -58,7 +59,7 @@ program
   akari undo                          直前の実行を元に戻す
   echo "要約して" | akari chat         標準入力から
 
-まだ実装されていないもの: recall / digest / serve / mcp / index / web（docs/spec/11-roadmap.md の P2〜P6）
+まだ実装されていないもの: serve / mcp / index / web（docs/spec/11-roadmap.md の P3〜P6）
 `,
   );
 
@@ -204,10 +205,24 @@ endpoints
   )
   .action(async (n, o) => run(() => endpointsProbe(n, { ...globals(), ...o })));
 
+program
+  .command('digest')
+  .description('いまモデルが前提にしている圧縮版を、5分類で表示する')
+  .option('-C, --cwd <dir>', 'この作業フォルダの直近の会話（既定はカレント）')
+  .option('--conversation <ID>', '会話を指定する（前方一致でよい）')
+  .action(async (o) => run(() => digestCommand({ ...globals(), ...o })));
+
+program
+  .command('recall [語句]')
+  .description('会話の生の記録を検索する（圧縮された部分も含む）')
+  .option('-C, --cwd <dir>', 'この作業フォルダの直近の会話（既定はカレント）')
+  .option('--conversation <ID>', '会話を指定する（前方一致でよい）')
+  .option('--read <ID>', 'そのメッセージの原文を読む')
+  .option('--limit <n>', '表示件数。既定10')
+  .action(async (q, o) => run(() => recallCommand(q, { ...globals(), ...o })));
+
 // まだ無い機能。あるように見せない。
 for (const [name, desc, when] of [
-  ['recall', '生の記録の検索', 'P2'],
-  ['digest', '文脈の圧縮版の表示', 'P2'],
   ['serve', 'ハーネスAPI', 'P3'],
   ['mcp', 'MCP の登録と公開', 'P4'],
   ['index', 'ベクトル索引', 'P5'],

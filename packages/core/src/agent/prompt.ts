@@ -47,6 +47,12 @@ export type PromptContext = {
   projectInstructions?: string;
   conversationInstructions?: string;
   git?: { isRepo: boolean; branch?: string };
+  /**
+   * 圧縮版（docs/spec/16-context.md）。古いやり取りの代わりにここへ置く。
+   * 会話の途中に「圧縮版」という発言を差し込むと、利用者とモデルが交互に話す並びが崩れ、
+   * それを断るモデル（Gemma 系など）があるため、システムプロンプトの末尾に置く。
+   */
+  digest?: string;
 };
 
 export function buildSystemPrompt(ctx: PromptContext): string {
@@ -84,6 +90,14 @@ export function buildSystemPrompt(ctx: PromptContext): string {
   }
   if (ctx.conversationInstructions?.trim()) {
     parts.push(`--- この会話の指示 ---\n${ctx.conversationInstructions}\n--- ここまで ---`);
+  }
+  if (ctx.digest !== undefined) {
+    const recall = ctx.tools.some((t) => t.name === 'recall_search');
+    parts.push(`## これまでの経過（圧縮版）
+会話が長くなったため、古いやり取りを次のようにまとめています。角括弧の中は根拠になったメッセージの ID です。
+${recall ? '圧縮された部分の詳細が必要なら recall_search で探し、recall_read で原文を読んでください。\n' : ''}ここに無いことを「無かったこと」と決めつけないでください。
+
+${ctx.digest}`);
   }
   return parts.join('\n\n');
 }

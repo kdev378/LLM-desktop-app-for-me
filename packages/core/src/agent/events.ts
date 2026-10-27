@@ -32,7 +32,9 @@ export type ApprovalDecision =
   | { kind: 'deny'; feedback?: string }
   | { kind: 'abort' };
 
-export type RunEndReason = 'done' | 'aborted' | 'max-steps' | 'error' | 'denied' | 'loop';
+/** 'context-full' … 圧縮しても文脈に入りきらず止めた（16-context.md）。 */
+export type RunEndReason =
+  'done' | 'aborted' | 'max-steps' | 'error' | 'denied' | 'loop' | 'context-full';
 
 export type RunEvent =
   | {
@@ -80,6 +82,15 @@ export type RunEvent =
       change?: FileChange;
     }
   | { type: 'step-end'; step: number; usage?: Usage }
+  /** 文脈の圧縮（docs/spec/16-context.md「イベント」）。 */
+  | { type: 'compaction-start'; turns: number; beforeTokens: number; estimated: boolean }
+  | {
+      type: 'compaction-end';
+      compactionId: string;
+      afterTokens: number;
+      estimated: boolean;
+      fallback?: string;
+    }
   | { type: 'notice'; level: 'info' | 'warn'; message: string }
   | {
       type: 'run-end';

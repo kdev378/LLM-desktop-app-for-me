@@ -1,5 +1,6 @@
 import type { FinishReason, ProviderError, ToolCallRequest, Usage } from '../provider/types.js';
 import type { RunEndReason } from './events.js';
+import type { Compaction } from '../context/digest.js';
 
 /**
  * 実行エンジンが、やり取りを記録係へ渡すための口。仕様: docs/spec/04-chat.md
@@ -54,4 +55,6 @@ export interface ConversationRecorder {
   /** 生成中の途中経過。null で消す。 */
   inflight(runId: string, partial: InflightPartial | null): Promise<void>;
   runEnded(runId: string, reason: RunEndReason): Promise<void>;
+  /** 文脈を圧縮した。会話の見出しに残す（生のメッセージは消さない）。 */
+  compacted(compaction: Compaction): Promise<void>;
 }

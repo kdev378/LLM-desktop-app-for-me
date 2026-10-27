@@ -6,6 +6,7 @@ import { readJson, writeJsonAtomic, withFileQueue } from '../util/json.js';
 import { AkariError } from '../util/errors.js';
 import type { FinishReason, ProviderError, Usage } from '../provider/types.js';
 import type { RunEndReason } from '../agent/events.js';
+import type { Compaction } from '../context/digest.js';
 import type { ConversationRecorder, InflightPartial, RecordedMessage } from '../agent/recorder.js';
 
 /**
@@ -102,7 +103,7 @@ export type ConversationHeader = {
   messageCount: number;
   settings: ConversationSettings;
   runs: RunSummary[];
-  /** 文脈の圧縮の記録（16-context.md）。形は P2 で決める。今は読んだものを消さずに残すだけ。 */
+  /** 文脈の圧縮の記録（16-context.md）。読めない形のものも消さずに残す。 */
   compactions: unknown[];
   createdAt: string;
   updatedAt: string;
@@ -203,6 +204,30 @@ export class Conversation {
     return message;
   }
 
+  /** 圧縮の記録を足す。生のメッセージは変えない（16-context.md）。 */
+  async addCompaction(c: Compaction): Promise<void> {
+    this.assertWritable();
+    this.header.compactions.push(c);
+    await this.saveHeader();
+  }
+
+  /** いちばん新しい圧縮の記録。形が読めないものは使わない（推測で補わない）。 */
+  latestCompaction(): Compaction | null {
+    for (let i = this.header.compactions.length - 1; i >= 0; i--) {
+      const c = this.header.compactions[i] as Partial<Compaction> | undefined;
+      if (
+        c &&
+        typeof c.id === 'string' &&
+        Array.isArray(c.coveredMessageIds) &&
+        typeof c.digest === 'object' &&
+        c.digest !== null
+      ) {
+        return c as Compaction;
+      }
+    }
+    return null;
+  }
+
   async updateSettings(patch: ConversationSettings): Promise<void> {
     this.assertWritable();
     this.header.settings = { ...this.header.settings, ...patch };
@@ -262,6 +287,7 @@ export class Conversation {
       record: async (runId, m) => {
         await this.append(fromRecorded(m, runId, opts), { id: m.id });
       },
+      compacted: (c) => this.addCompaction(c),
     };
   }
 

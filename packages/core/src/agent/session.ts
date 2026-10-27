@@ -32,6 +32,18 @@ import type {
 } from '../provider/types.js';
 import type { ConversationRecorder, RecordedMessage } from './recorder.js';
 import { buildApiMessages, type TranscriptEntry } from './transcript.js';
+import { RECALL_TOOLS } from '../tools/recall.js';
+import {
+  compactThreshold,
+  estimateTokens,
+  selectForCompaction,
+  truncateMiddle,
+  type Unit,
+} from '../context/budget.js';
+import { compact } from '../context/compactor.js';
+import { renderDigest, type Compaction } from '../context/digest.js';
+import type { ContextSettings } from '../config/schema.js';
+import type { ChatMessage, ToolDefinition } from '../provider/types.js';
 import type { Logger } from '../diagnostics/logger.js';
 
 /**
@@ -64,6 +76,13 @@ export type SessionOptions = {
   recorder?: ConversationRecorder;
   /** 記録先の会話。run-start に載せて、呼び出し側が続きを指定できるようにする。 */
   conversationId?: string;
+  /**
+   * 文脈の管理（docs/spec/16-context.md）。省略すると量を見ない（圧縮しない）。
+   * windowTokens はそのモデルの文脈長。分からなければ null。
+   */
+  context?: { settings: ContextSettings; windowTokens: number | null; endpointId: string };
+  /** 続きから始めるときの、いちばん新しい圧縮の記録。 */
+  compaction?: Compaction;
   projectInstructions?: string;
   conversationInstructions?: string;
   /**
@@ -82,6 +101,30 @@ const MAX_CALLS_PER_STEP = 8;
 const LOOP_THRESHOLD = 3;
 /** 生成中の途中経過を保存する間隔（docs/spec/07-data.md）。 */
 const INFLIGHT_INTERVAL_MS = 1000;
+/** 入りきらないときに、道具の出力を送るときだけ切り詰める長さ（文字）。 */
+const TRUNCATE_CHARS = 4000;
+/** 実測と概算の比として信じる範囲。 */
+const CALIBRATION_MIN = 0.5;
+const CALIBRATION_MAX = 2;
+/** 文脈長のこの割合を超えたら、応答の余地が無いので送らない。 */
+const HARD_LIMIT_RATIO = 0.95;
+
+type PromptBase = {
+  instructions: Awaited<ReturnType<typeof loadInstructionFiles>>;
+  git: { isRepo: boolean; branch?: string };
+  toolsMode: ToolsMode;
+};
+
+type BuiltRequest = {
+  messages: ChatMessage[];
+  tools?: ToolDefinition[];
+  /** 文字数からの概算。実測との比を取るのに使う。 */
+  rawEstimate: number;
+  /** 判断に使う量（実測で補正したもの。無ければ概算）。 */
+  tokens: number;
+  estimatedOnly: boolean;
+};
+
 /** 代替方式で1回の応答から受け付けるブロック数（docs/spec/02-provider.md）。 */
 const MAX_PROMPTED_CALLS_PER_STEP = 3;
 
@@ -120,6 +163,15 @@ export class Session {
   private currentStep = 0;
   /** 保存の失敗を一度知らせたか。 */
   private saveFailed = false;
+  /** いちばん新しい圧縮。古いやり取りの代わりに、その圧縮版を送る。 */
+  private compaction: Compaction | null = null;
+  /** 圧縮した生の記録の ID。送らないが、消さない。 */
+  private covered = new Set<string>();
+  /** 送るときだけ先頭と末尾に切り詰める道具の出力（それでも入りきらないとき）。 */
+  private truncated = new Set<string>();
+  /** 実測（usage.prompt）と概算の比。分かれば概算をこれで補正する。 */
+  private calibration: number | null = null;
+  private thresholdWarned = false;
   private running = false;
   private aborted = false;
 
@@ -136,6 +188,10 @@ export class Session {
     this.unknownTools = unknown;
     this.limits = limits;
     this.entries = [...(opts.transcript ?? [])];
+    if (opts.compaction) {
+      this.compaction = opts.compaction;
+      this.covered = new Set(opts.compaction.coveredMessageIds);
+    }
   }
 
   static create(opts: SessionOptions): Session {
@@ -196,15 +252,7 @@ export class Session {
     const git = await detectGit(this.workspace.root);
     const toolsMode = this.opts.toolsMode ?? 'both';
 
-    const system = buildSystemPrompt({
-      workspaceRoot: this.workspace.root,
-      tools: this.tools,
-      toolsMode,
-      instructions,
-      projectInstructions: this.opts.projectInstructions,
-      conversationInstructions: this.opts.conversationInstructions,
-      git,
-    });
+    const promptBase = { instructions, git, toolsMode };
 
     yield {
       type: 'run-start',
@@ -263,14 +311,27 @@ export class Session {
       let stepError: ProviderError | undefined;
       const nativeCalls: ToolCallRequest[] = [];
       let failed = false;
+
+      // 送る前に量を見る。超えそうなら古い手を圧縮する（16-context.md「いつ圧縮するか」）
+      const prepared = yield* this.prepareRequest(promptBase);
+      if (this.aborted) {
+        endReason = 'aborted';
+        break;
+      }
+      if (prepared === null) {
+        endReason = 'context-full';
+        endError =
+          '圧縮して道具の出力を切り詰めても、文脈に入りきりませんでした。目的を分けるか、文脈長の大きいモデルで実行してください。';
+        break;
+      }
       const stepStartedAt = Date.now();
       let lastInflightAt = Date.now();
 
       for await (const ev of this.opts.provider.chat(
         {
           model: this.opts.model,
-          messages: [{ role: 'system', content: system }, ...buildApiMessages(this.entries)],
-          ...(toolsMode === 'prompted' ? {} : { tools: toolDefinitions(this.tools) }),
+          messages: prepared.messages,
+          ...(prepared.tools ? { tools: prepared.tools } : {}),
           ...(this.opts.reasoning ? { reasoning: this.opts.reasoning } : {}),
         },
         this.controller.signal,
@@ -292,6 +353,15 @@ export class Session {
         } else if (ev.type === 'finish') {
           usage = ev.usage;
           finishReason = ev.reason;
+          // 実測が来たら、以後の概算をこれで補正する（実測を最優先する。16-context.md）。
+          // ただし概算の半分〜2倍の外は信じない。文字数からの概算がそこまで外れることはまず無く、
+          // 外れた報告を信じると、溢れるまで圧縮しなくなる
+          if (ev.usage && ev.usage.prompt > 0 && prepared.rawEstimate > 0) {
+            this.calibration = Math.min(
+              CALIBRATION_MAX,
+              Math.max(CALIBRATION_MIN, ev.usage.prompt / prepared.rawEstimate),
+            );
+          }
         } else if (ev.type === 'error') {
           if (ev.error.kind === 'aborted') {
             endReason = 'aborted';
@@ -459,9 +529,11 @@ export class Session {
     call: PendingCall,
     journal: ChangeJournal,
   ): AsyncGenerator<RunEvent, 'ok' | 'abort', void> {
-    const tool = findTool(this.tools, call.name);
+    const tool = findTool(this.activeTools(), call.name);
     if (!tool) {
-      const msg = `そのツールはありません: ${call.name}。使えるのは ${this.tools.map((t) => t.name).join(', ')} です。`;
+      const msg = `そのツールはありません: ${call.name}。使えるのは ${this.activeTools()
+        .map((t) => t.name)
+        .join(', ')} です。`;
       yield { type: 'tool-result', callId: call.id, name: call.name, ok: false, summary: msg };
       yield* this.pushToolResult(call, false, msg);
       return 'ok';
@@ -484,6 +556,7 @@ export class Session {
       signal: this.controller.signal,
       callId: call.id,
       logger: this.opts.logger,
+      transcript: () => this.entries,
     };
 
     let preview: ToolPreview | undefined;
@@ -695,6 +768,179 @@ export class Session {
     }
     const p = (args as { path?: unknown }).path;
     return typeof p === 'string' ? `${name}:${p}` : null;
+  }
+
+  /**
+   * 今使える道具。圧縮が起きた会話でだけ recall_* を足す（使う意味が無い道具を渡さない）。
+   * 道具を渡さない実行（--no-tools）には足さない。
+   */
+  private activeTools(): ToolSpec[] {
+    if (this.compaction === null || this.tools.length === 0) return this.tools;
+    return [...this.tools, ...RECALL_TOOLS];
+  }
+
+  /** 送るものを組み立てる。圧縮していれば圧縮版を足し、圧縮した生の記録は送らない。 */
+  private buildRequest(base: PromptBase): BuiltRequest {
+    const tools = this.activeTools();
+    const system = buildSystemPrompt({
+      workspaceRoot: this.workspace.root,
+      tools,
+      toolsMode: base.toolsMode,
+      instructions: base.instructions,
+      projectInstructions: this.opts.projectInstructions,
+      conversationInstructions: this.opts.conversationInstructions,
+      git: base.git,
+      ...(this.compaction ? { digest: renderDigest(this.compaction.digest) } : {}),
+    });
+    const visible = this.entries
+      .filter((e) => !this.covered.has(e.id))
+      .map((e) =>
+        this.truncated.has(e.id) ? { ...e, text: truncateMiddle(e.text, TRUNCATE_CHARS) } : e,
+      );
+    const messages: ChatMessage[] = [
+      { role: 'system', content: system },
+      ...buildApiMessages(visible),
+    ];
+    const defs =
+      base.toolsMode === 'prompted' || tools.length === 0 ? undefined : toolDefinitions(tools);
+    const rawEstimate = estimateTokens(messages, defs);
+    return {
+      messages,
+      ...(defs ? { tools: defs } : {}),
+      rawEstimate,
+      tokens: this.calibration ? Math.ceil(rawEstimate * this.calibration) : rawEstimate,
+      estimatedOnly: this.calibration === null,
+    };
+  }
+
+  /**
+   * 量を見て、必要なら圧縮する。仕様: docs/spec/16-context.md
+   * 入りきらないと分かったときだけ null を返す（実行を止める）。黙って古いものを落とさない。
+   */
+  private async *prepareRequest(
+    base: PromptBase,
+  ): AsyncGenerator<RunEvent, BuiltRequest | null, void> {
+    let req = this.buildRequest(base);
+    const ctx = this.opts.context;
+    if (!ctx) return req;
+    const window = ctx.windowTokens;
+    const over = (r: BuiltRequest) =>
+      r.tokens > compactThreshold(ctx.settings, window, r.estimatedOnly);
+    const doesNotFit = (r: BuiltRequest) => window !== null && r.tokens > window * HARD_LIMIT_RATIO;
+    if (!over(req)) return req;
+
+    if (ctx.settings.mode === 'auto') {
+      const units = this.chooseUnits(
+        ctx.settings.keepRecentTurns,
+        compactThreshold(ctx.settings, window, req.estimatedOnly),
+      );
+      if (units.length > 0) {
+        const turns = units.filter((u) => u.kind === 'assistant').length;
+        const before = req;
+        yield {
+          type: 'compaction-start',
+          turns,
+          beforeTokens: before.tokens,
+          estimated: before.estimatedOnly,
+        };
+        const digestModel = ctx.settings.digestModel ?? this.opts.model;
+        const result = await compact({
+          provider: this.opts.provider,
+          model: digestModel,
+          units,
+          previous: this.compaction?.digest ?? null,
+          knownIds: new Set(this.entries.map((e) => e.id)),
+          // 1回の圧縮に使う量。文脈長の半分（分からなければ判断の閾値の8割）
+          budgetTokens:
+            window !== null
+              ? Math.floor(window * 0.5)
+              : Math.floor(ctx.settings.compactAtTokens * 0.8),
+          ...(this.opts.reasoning ? { reasoning: this.opts.reasoning } : {}),
+          signal: this.controller.signal,
+        });
+        const coveredIds = [...this.covered, ...units.flatMap((u) => u.entries.map((e) => e.id))];
+        const record: Compaction = {
+          id: ulid(),
+          createdAt: new Date().toISOString(),
+          coveredMessageIds: coveredIds,
+          coveredTurns: turns,
+          model: digestModel,
+          endpointId: ctx.endpointId,
+          digest: result.digest,
+          beforeTokens: before.tokens,
+          afterTokens: 0,
+          estimated: before.estimatedOnly,
+          ...(result.fallback ? { fallback: result.fallback } : {}),
+        };
+        this.compaction = record;
+        this.covered = new Set(coveredIds);
+        req = this.buildRequest(base);
+        record.afterTokens = req.tokens;
+        for (const n of result.notes) yield { type: 'notice', level: 'warn', message: n };
+        yield* this.persist((r) => r.compacted(record));
+        yield {
+          type: 'compaction-end',
+          compactionId: record.id,
+          afterTokens: record.afterTokens,
+          estimated: req.estimatedOnly,
+          ...(record.fallback ? { fallback: record.fallback } : {}),
+        };
+        if (this.aborted || !over(req)) return req;
+      }
+
+      // それでも多いなら、送るときだけ大きい道具の出力から切り詰める（生の記録は変えない）
+      const big = this.entries
+        .filter((e) => e.role === 'tool' && !this.covered.has(e.id) && !this.truncated.has(e.id))
+        .filter((e) => e.text.length > TRUNCATE_CHARS)
+        .sort((a, b) => b.text.length - a.text.length);
+      const cut: string[] = [];
+      for (const e of big) {
+        this.truncated.add(e.id);
+        cut.push(e.toolName ?? 'tool');
+        req = this.buildRequest(base);
+        if (!over(req)) break;
+      }
+      if (cut.length > 0) {
+        yield {
+          type: 'notice',
+          level: 'warn',
+          message: `文脈に入りきらないため、道具の出力 ${cut.length} 件を、送るときだけ先頭と末尾を残して切り詰めました（生の記録はそのまま）。`,
+        };
+      }
+      if (!over(req)) return req;
+    }
+
+    if (doesNotFit(req)) return null;
+    // 閾値は超えているが、文脈長には収まっている（または文脈長が分からない）。送るが、黙らない
+    if (!this.thresholdWarned) {
+      this.thresholdWarned = true;
+      yield {
+        type: 'notice',
+        level: 'warn',
+        message:
+          ctx.settings.mode === 'off'
+            ? '文脈が圧縮の目安を超えていますが、context.mode が off のため圧縮しません。'
+            : '圧縮しても、文脈が圧縮の目安を超えています。このまま続けます。',
+      };
+    }
+    return req;
+  }
+
+  /**
+   * 圧縮する単位を選ぶ。直近に残す手だけで閾値の半分を超えるなら、残す手数を減らす（最低1手）。
+   * そうしないと、残した手だけで閾値の近くまで埋まり、1手ごとに圧縮（＝モデルの呼び出し1回）が起きる。
+   */
+  private chooseUnits(keepRecent: number, threshold: number): Unit[] {
+    for (let keep = keepRecent; keep >= 1; keep--) {
+      const units = selectForCompaction(this.entries, this.covered, keep);
+      if (keep === 1) return units;
+      const taking = new Set(units.flatMap((u) => u.entries.map((e) => e.id)));
+      const rest = this.entries.filter((e) => !this.covered.has(e.id) && !taking.has(e.id));
+      const raw = estimateTokens(buildApiMessages(rest));
+      const tokens = this.calibration ? raw * this.calibration : raw;
+      if (tokens <= threshold * 0.5) return units;
+    }
+    return [];
   }
 
   private async *pushToolResult(

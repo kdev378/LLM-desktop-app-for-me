@@ -143,7 +143,7 @@ akari web doctor
 圧縮された会話の、生の記録を引く（`16-context.md`）。
 
 ```sh
-akari recall "認証まわりで何を決めたか"        # 直近の会話を検索
+akari recall "認証まわりで何を決めたか"        # この作業フォルダの直近の会話を検索
 akari recall --conversation <id> "タイムアウト"
 akari recall --read <messageId>                # 原文を読む
 akari digest                                   # いま文脈に載っている圧縮版を見る
@@ -151,6 +151,10 @@ akari digest --json
 ```
 
 `digest` は、モデルが何を前提に動いているかを利用者が読める形で出す。
+
+- 対象の会話は、`--conversation <ID>` か、`-C <dir>`（既定はカレント）の直近の `run` の会話
+- `recall` は圧縮された部分も含めて、生の記録すべてを探す。圧縮済みのものには印を付ける。`--limit <n>`（既定10）
+- 圧縮がまだ起きていない会話では、`digest` はそう言って終わる（終了コード0）
 
 ### `akari doctor`
 接続先ごとの到達性、`/models` の結果、機能判定、設定の要約、データの件数を出す。

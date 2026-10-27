@@ -31,7 +31,16 @@ function readScript() {
   }
 }
 
+/** 送られたメッセージの量から、もっともらしい入力トークン数を作る（1トークン≒2.5文字）。 */
+function promptTokens(payload) {
+  return Math.max(1, Math.ceil(JSON.stringify(payload.messages ?? []).length / 2.5));
+}
+
+// AKARI_MOCK_SEQUENTIAL=1 なら、台本を「来た順」に進める（圧縮の確認用）。
+// 既定の「これまでの応答の数」で引く方式は、圧縮で古い応答が減ると台本が巻き戻る。
+let sequentialTurn = 0;
 function turnIndex(payload) {
+  if (process.env.AKARI_MOCK_SEQUENTIAL === '1') return payload.__turn ?? 0;
   const messages = Array.isArray(payload.messages) ? payload.messages : [];
   return messages.filter((m) => m && m.role === 'assistant').length;
 }
@@ -113,6 +122,42 @@ const server = http.createServer((req, res) => {
 
     const payload = payload0;
     const last = [...(payload.messages ?? [])].reverse().find((m) => m.role === 'user');
+
+    // 文脈の圧縮の依頼（docs/spec/16-context.md）。台本とは別に、決まった形で答える。
+    // AKARI_MOCK_DIGEST=broken なら、形式を守らない答えを返す（退避方法の確認用）。
+    const first = (payload.messages ?? [])[0];
+    if (
+      first &&
+      typeof first.content === 'string' &&
+      first.content.startsWith('あなたは作業記録の要約係')
+    ) {
+      const log = String(payload.messages?.[1]?.content ?? '');
+      const ids = [...log.matchAll(/\[ID ([0-9A-Z]{26})\]/g)].map((m) => m[1]);
+      const digest = {
+        decisions: [{ text: '（模擬）ファイルを順に読む方針にした', sources: ids.slice(0, 1) }],
+        confirmed: [{ text: `（模擬）${ids.length}件のログを確認した`, sources: ids.slice(0, 2) }],
+        rejected: [
+          { text: '（模擬）一括で読む案は、量が多すぎるため棄却', sources: ids.slice(0, 1) },
+        ],
+        open: [],
+        next: [{ text: '（模擬）残りを読む', sources: [] }],
+      };
+      const reply =
+        process.env.AKARI_MOCK_DIGEST === 'broken'
+          ? 'まとめました。（形式を守らない答え）'
+          : '```akari-digest\n' + JSON.stringify(digest) + '\n```';
+      res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
+      res.write(
+        `data: ${JSON.stringify({ id: 'mock', object: 'chat.completion.chunk', model: payload.model, choices: [{ index: 0, delta: { content: reply }, finish_reason: null }] })}\n\n`,
+      );
+      res.write(
+        `data: ${JSON.stringify({ id: 'mock', object: 'chat.completion.chunk', model: payload.model, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\n`,
+      );
+      res.write('data: [DONE]\n\n');
+      res.end();
+      return;
+    }
+    if (url.endsWith('/chat/completions')) payload.__turn = sequentialTurn++;
     // AKARI_MOCK_NO_TOOLS=1 で「ツールを理解しないモデル」を再現する。
     // Gemma 系のようにツール用テンプレートを持たないモデルの挙動にあたる。
     // 名前に notool を含むモデルは「ツールを理解しないモデル」として振る舞う。
@@ -158,7 +203,8 @@ const server = http.createServer((req, res) => {
       send({}, 'tool_calls');
       if (payload.stream_options?.include_usage) {
         res.write(
-          `data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 30, completion_tokens: 8, total_tokens: 38 } })}\n\n`,
+          // 送られた量に見合った数を返す（いつも同じ数だと、実測で補正する仕組みを誤らせる）
+          `data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: promptTokens(payload), completion_tokens: 8, total_tokens: promptTokens(payload) + 8 } })}\n\n`,
         );
       }
       res.write('data: [DONE]\n\n');

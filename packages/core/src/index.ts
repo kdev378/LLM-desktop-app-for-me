@@ -16,6 +16,7 @@ export {
   type ModelCapability,
   type GenerationSettings,
   type AgentSettings,
+  type ContextSettings,
   type PermissionMode,
   type Credentials,
 } from './config/schema.js';
@@ -160,6 +161,30 @@ export {
 } from './store/conversations.js';
 export { toApiMessages, toTranscript } from './store/replay.js';
 export { buildApiMessages, type TranscriptEntry } from './agent/transcript.js';
+
+// 文脈の管理と圧縮（docs/spec/16-context.md）
+export {
+  parseDigest,
+  renderDigest,
+  emptyDigest,
+  DIGEST_KEYS,
+  DIGEST_LABELS,
+  type Digest,
+  type DigestItem,
+  type DigestKey,
+  type Compaction,
+  type CompactionFallback,
+} from './context/digest.js';
+export {
+  estimateTokens,
+  compactThreshold,
+  selectForCompaction,
+  splitUnits,
+  CHARS_PER_TOKEN,
+  type Unit,
+} from './context/budget.js';
+export { compact, type CompactRequest, type CompactResult } from './context/compactor.js';
+export { searchTranscript, formatEntry, RECALL_TOOLS, type RecallHit } from './tools/recall.js';
 export {
   approvalOptions,
   type RunEvent,

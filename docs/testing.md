@@ -626,7 +626,7 @@ echo "終了コード: $?"
 
 ```sh
 akari serve
-akari recall
+akari mcp
 echo "終了コード: $?"
 ```
 
@@ -736,6 +736,46 @@ akari conversations show <ID>
 ```sh
 akari run --no-save --no-tools "保存しないで" -m <モデルID>   # 一覧に増えない
 akari conversations rm <ID>                                    # 確認のあとゴミ箱へ
+```
+
+### 11-6. 文脈の圧縮（P2）
+
+早めに圧縮が起きるようにしてから、ファイルを何度も読ませる。
+
+```sh
+akari config set context.compactAtTokens 3000
+akari config set context.keepRecentTurns 1
+cd /tmp/akari-sandbox
+for i in 1 2 3 4 5; do seq 1 300 | sed "s/^/$i: 行 /" > part$i.txt; done
+echo "合言葉はりんごパイ" >> part1.txt
+akari run --permission full "part1.txt から part5.txt を順に読んで、それぞれの最後の行を教えて" -m <モデルID>
+```
+
+**期待**:
+- 途中で `⧉ 文脈が約…トークンになったため、古い N 手を圧縮しています…` と `⧉ 圧縮しました` が出る
+- 圧縮のあとも作業が続き、最後まで答える（同じファイルを読み直し続けたりしない）
+
+```sh
+akari digest
+```
+
+**ここがいちばん見たいところ**: 5分類（決定・確認済み・棄却案・未解決・次の行動）が、**中身のある文**で埋まっているか。
+`機械的な要約で残しています` と出ていたら、そのモデルは決められた形で圧縮版を書けなかった。
+**モデルごとに、どちらになったかを教えてほしい。** 4B級のモデルで書けるかどうかは、まだ誰も確かめていない。
+
+```sh
+akari recall "りんごパイ"                       # 圧縮済みの part1 の中身が見つかる
+akari run -c "part1.txt の合言葉は何だった？" -m <モデルID>
+```
+
+**期待**: `recall` で「圧縮済み」の印付きで見つかる。続きでは、モデルが圧縮版か `recall_search` を使って
+「りんごパイ」と答える（ファイルを読み直して答えてもよいが、読み直さずに答えられれば recall が効いている）。
+
+終わったら設定を戻す:
+
+```sh
+akari config set context.compactAtTokens 12000
+akari config set context.keepRecentTurns 3
 ```
 
 ---

@@ -1,5 +1,6 @@
 import type { Workspace } from './workspace.js';
 import type { ChangeJournal, FileChange } from '../agent/journal.js';
+import type { TranscriptEntry } from '../agent/transcript.js';
 import type { Logger } from '../diagnostics/logger.js';
 
 /** 仕様: docs/spec/05-agent.md「ツール一覧」 */
@@ -31,6 +32,8 @@ export type ToolContext = {
   /** run_command の逐次出力。無反応の時間を作らないため。 */
   onOutput?: (stream: 'stdout' | 'stderr', text: string) => void;
   logger?: Logger;
+  /** この会話の生の記録（recall_search / recall_read が使う。16-context.md）。 */
+  transcript?: () => readonly TranscriptEntry[];
 };
 
 export type ToolResult = {

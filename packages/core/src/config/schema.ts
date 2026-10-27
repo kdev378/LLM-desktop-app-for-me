@@ -123,12 +123,27 @@ export const loggingSchema = z.object({
   retainDays: z.number().int().min(1).max(365).default(14),
 });
 
+/** 文脈の管理と圧縮（docs/spec/16-context.md「設定のまとめ」）。 */
+export const contextSchema = z.object({
+  /** auto なら圧縮する。off なら圧縮せず、入りきらなければ止める。 */
+  mode: z.enum(['auto', 'off']).default('auto'),
+  /** 文脈長の何割を超えたら圧縮するか（文脈長が分かるとき）。 */
+  compactAtRatio: z.number().min(0.3).max(0.95).default(0.7),
+  /** 文脈長が分からないときの絶対値。 */
+  compactAtTokens: z.number().int().min(1000).default(12000),
+  /** 生のまま残す直近の手数（モデルの応答1回とその道具の結果で1手）。 */
+  keepRecentTurns: z.number().int().min(1).max(20).default(3),
+  /** 圧縮に使うモデル。null なら実行と同じ。同じ接続先のモデル名。 */
+  digestModel: z.string().min(1).nullable().default(null),
+});
+
 export const configSchema = z.object({
   schemaVersion: z.number().int().default(CONFIG_SCHEMA_VERSION),
   endpoints: z.array(endpointSchema).default([]),
   activeEndpointId: z.string().nullable().default(null),
   generation: generationSchema.default({}),
   agent: agentSchema.default({}),
+  context: contextSchema.default({}),
   ui: uiSchema.default({}),
   logging: loggingSchema.default({}),
   concurrency: z
@@ -142,6 +157,7 @@ export type EndpointCapabilities = z.infer<typeof capabilitiesSchema>;
 export type ModelCapability = z.infer<typeof modelCapabilitySchema>;
 export type GenerationSettings = z.infer<typeof generationSchema>;
 export type AgentSettings = z.infer<typeof agentSchema>;
+export type ContextSettings = z.infer<typeof contextSchema>;
 export type PermissionMode = AgentSettings['permissionMode'];
 
 export function defaultConfig(): Config {

@@ -803,3 +803,71 @@ test('存在しない会話は終了コード2', async () => {
   assert.equal(r.code, 2);
   assert.match(r.stderr, /見つかりません/);
 });
+
+// ---------------- 文脈の圧縮（docs/spec/16-context.md） ----------------
+
+test('長い作業で圧縮が起き、digest で5分類が、recall で圧縮した生の記録が見える', async () => {
+  const line = 'あいうえお'.repeat(19);
+  const big = (tag: string) =>
+    Array.from({ length: 80 }, (_, i) => `${i}行目 ${line}`).join('\n') + `\n${tag}\n`;
+  const dir = await sandbox({
+    'a.txt': big('合言葉はりんごパイ'),
+    'b.txt': big('b'),
+    'c.txt': big('c'),
+  });
+  await akari(['config', 'set', 'context.compactAtTokens', '6000']);
+  await akari(['config', 'set', 'context.keepRecentTurns', '1']);
+  try {
+    await withScriptedServer(
+      11817,
+      [
+        { name: 'read_file', arguments: { path: 'a.txt' } },
+        { name: 'read_file', arguments: { path: 'b.txt' } },
+        { name: 'read_file', arguments: { path: 'c.txt' } },
+        { text: '読み終えました。' },
+      ],
+      async (ep) => {
+        const r = await akari([
+          '-e',
+          ep,
+          'run',
+          '--permission',
+          'full',
+          '--tools-mode',
+          'native',
+          '-C',
+          dir,
+          '-p',
+          '3つ読んで',
+        ]);
+        assert.equal(r.code, 0, r.stderr);
+        assert.match(r.stdout, /圧縮しています/);
+        assert.match(r.stdout, /圧縮しました/);
+
+        const d = await akari(['digest', '-C', dir]);
+        assert.equal(d.code, 0, d.stderr);
+        assert.match(d.stdout, /決定（1）/);
+        assert.match(d.stdout, /棄却案（1）/);
+        assert.match(d.stdout, /根拠: 01/);
+
+        const rc = await akari(['recall', '-C', dir, 'りんごパイ']);
+        assert.equal(rc.code, 0, rc.stderr);
+        assert.match(rc.stdout, /圧縮済み/);
+      },
+      { AKARI_MOCK_SEQUENTIAL: '1' },
+    );
+  } finally {
+    await akari(['config', 'set', 'context.compactAtTokens', '12000']);
+    await akari(['config', 'set', 'context.keepRecentTurns', '3']);
+  }
+});
+
+test('圧縮がまだ起きていない会話では、digest はそう言う', async () => {
+  const dir = await sandbox({});
+  await withScriptedServer(11818, [{ text: 'はい' }], async (ep) => {
+    await akari(['-e', ep, 'run', '--no-tools', '-C', dir, '-p', 'やあ']);
+    const d = await akari(['digest', '-C', dir]);
+    assert.equal(d.code, 0, d.stderr);
+    assert.match(d.stdout, /まだ圧縮が起きていません/);
+  });
+});

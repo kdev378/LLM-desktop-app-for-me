@@ -64,6 +64,8 @@ akari run -m qwen3-4b "直して"     # 後ろ（同じ）
 | `undo` | 実行が変えた内容を元に戻す | **触る** |
 | `chat` | 対話。道具なし | 触らない |
 | `conversations` | 保存した会話の一覧・表示・削除 | 触らない |
+| `digest` | いまモデルが前提にしている圧縮版を見る | 触らない |
+| `recall` | 会話の生の記録を検索する（圧縮された部分も） | 触らない |
 | `models` | モデル一覧 | 触らない |
 | `doctor` | 接続先・設定・データの状態 | 触らない |
 | `config …` | 設定と接続先の操作 | 設定ファイルのみ |
@@ -396,6 +398,11 @@ akari config set logging.level debug
 | `agent.maxSteps` | 1〜200 | `25` |
 | `agent.commandTimeoutMs` | 1000〜1800000 | `120000` |
 | `agent.toolOutputLimitBytes` | 1000〜10000000 | `100000` |
+| `context.mode` | `auto` / `off` | `auto` |
+| `context.compactAtRatio` | 0.3〜0.95 | `0.7` |
+| `context.compactAtTokens` | 1000以上 | `12000` |
+| `context.keepRecentTurns` | 1〜20 | `3` |
+| `context.digestModel` | モデル名 または `null` | `null`（実行と同じ） |
 | `agent.deniedCommands` | 文字列配列（JSON） | 下記 |
 | `ui.theme` | `light` / `dark` / `system` | `system` |
 | `ui.density` | `comfortable` / `compact` | `comfortable` |
@@ -512,6 +519,54 @@ akari config endpoints probe [名前|ID] [-m <モデル>] [--context <トーク�
 
 文脈長は、サーバが返せば表示される。LM Studio なら固有の口から取れる。
 返さないサーバでは `--context` で手で設定する。
+
+---
+
+## 文脈の圧縮（`digest` / `recall`）
+
+長い作業で文脈（モデルに一度に渡せる量）が埋まりそうになると、`run` は古いやり取りを
+「決定・確認済み・棄却案・未解決・次の行動」の5つに**圧縮して**作業を続ける。実行中にこう出る:
+
+```
+  ⧉ 文脈が約12,400トークン（概算）になったため、古い 6 手を圧縮しています…
+  ⧉ 圧縮しました: 約4,100トークン（概算）。中身は akari digest で見られます
+```
+
+- **生の記録は消えない。** 会話のファイルに全部残り、変わるのは次に送るものだけ
+- 圧縮したあとは、モデルに `recall_search` / `recall_read` を渡す。圧縮版に無い細部は、モデルが自分で原文を引ける
+- 圧縮した会話を `-c` で続けると、圧縮版と、圧縮していない部分の生だけを送る
+- モデルが圧縮版を書けなかったときは、機械的な要約（使った道具、読んだファイル、各応答の先頭）へ切り替え、
+  `機械的な要約で残しています（劣った圧縮です）` と出る
+- 圧縮しても入りきらないときは、送るときだけ大きい道具の出力を切り詰める。それでも文脈長を超えるなら
+  送らずに止まる（`文脈に入りきらないため停止`、終了コード1）
+- `chat` は圧縮しない（道具の出力が無く、溢れにくいため）
+
+```sh
+akari digest                              # この作業フォルダの直近の会話の圧縮版
+akari digest --conversation 01M5          # 会話を指定
+akari recall "タイムアウト"                 # 生の記録を検索（圧縮済みのものには印が付く）
+akari recall --read 01M5XX2F07ZS…         # 原文を読む
+```
+
+| コマンド | オプション | 意味 |
+|---|---|---|
+| `digest` / `recall` | `-C, --cwd <dir>` | この作業フォルダの直近の会話（既定はカレント） |
+| | `--conversation <ID>` | 会話を指定する（前方一致でよい） |
+| `recall` | `--read <ID>` | そのメッセージの原文を読む（思考の出力も含む） |
+| | `--limit <n>` | 表示件数（既定10） |
+
+検索は部分一致（大文字小文字を無視）。`/…/` で囲めば正規表現。
+
+**いつ圧縮するか**: モデルの文脈長が分かれば、その7割（概算しか無いときは6割）。
+分からなければ12,000トークン。文脈長は `akari models` の「文脈長」の列、または
+`akari config endpoints probe -m <モデル> --context <数>` で入れた値を使う。
+
+試すときに早めに圧縮させるには:
+
+```sh
+akari config set context.compactAtTokens 3000   # 文脈長が分からないモデルでの目安
+akari config set context.keepRecentTurns 1      # 生のまま残す直近の手数
+```
 
 ---
 
@@ -665,7 +720,6 @@ Windows ではアクセス権を絞れておらず、起動のたびに警告が
 
 | コマンド | 内容 | 予定 |
 |---|---|---|
-| `recall` / `digest` | 文脈の圧縮版と、生の記録の検索 | P2 |
 | `serve` | ハーネスAPI（ローカルHTTP） | P3 |
 | `mcp` | MCPの登録と公開 | P4 |
 | `index` | ベクトル索引 | P5 |
@@ -676,8 +730,7 @@ Windows ではアクセス権を絞れておらず、起動のたびに警告が
 - 過去の発言の編集と、応答の作り直し（会話の枝分かれ）。保存の形は対応しているが、操作はデスクトップで入れる
 - 会話の書き出し・読み込み（zip）
 - デスクトップアプリ
-- 設定の `context.*`（文脈の圧縮）と `agent.gitTools.*`（git書き込み）。
-  仕様にはあるが、まだ設定項目として存在しない
+- 設定の `agent.gitTools.*`（git書き込み）。仕様にはあるが、まだ設定項目として存在しない
 
 詳しくは `docs/spec/11-roadmap.md`。
 
