@@ -674,3 +674,132 @@ test('doctor は判定した結果をその場で表示し、次回も残す', a
     proc.kill('SIGKILL');
   }
 });
+
+// ---------------- 会話の保存（docs/spec/10-cli.md） ----------------
+
+type ListedConversation = {
+  id: string;
+  kind: string;
+  workspace: string | null;
+  messageCount: number;
+};
+
+async function listConversations(): Promise<ListedConversation[]> {
+  const r = await akari(['--json', 'conversations', '--limit', '100']);
+  assert.equal(r.code, 0, r.stderr);
+  return (JSON.parse(r.stdout) as { conversations: ListedConversation[] }).conversations;
+}
+
+test('run のやり取りが保存され、-c で続きから始めると前のやり取りがモデルへ渡る', async () => {
+  const dir = await sandbox({ 'README.md': '# 中身\n' });
+  // 模擬サーバの台本は「これまでの応答の数」で引く。続きでは前の応答の数だけ先へ進む
+  await withScriptedServer(
+    11812,
+    [
+      { name: 'read_file', arguments: { path: 'README.md' } },
+      { text: '読みました。' },
+      { text: '前回は README を読みました。' },
+    ],
+    async (ep) => {
+      const first = await akari([
+        '-e',
+        ep,
+        'run',
+        '--permission',
+        'full',
+        '-C',
+        dir,
+        '-p',
+        'README を読んで',
+      ]);
+      assert.equal(first.code, 0, first.stderr);
+      assert.match(first.stdout, /（新規）/);
+      const saved = (await listConversations()).find((c) => c.workspace === dir);
+      assert.ok(saved, '作業フォルダつきで保存される');
+      assert.equal(saved.kind, 'agent');
+      assert.equal(saved.messageCount, 4);
+
+      const second = await akari(['-e', ep, 'run', '-c', '-C', dir, '-p', 'さっき何をした？']);
+      assert.equal(second.code, 0, second.stderr);
+      assert.match(second.stdout, /の続き（これまで 4 件）/);
+      assert.match(second.stdout, /前回は README を読みました/, '前のやり取りがモデルへ渡っている');
+      const after = (await listConversations()).find((c) => c.id === saved.id);
+      assert.equal(after?.messageCount, 6, '同じ会話に足される');
+    },
+  );
+});
+
+test('別の作業フォルダの会話は続けられない（終了コード2で正しいフォルダを案内する）', async () => {
+  const a = await sandbox({ 'a.txt': 'a\n' });
+  const b = await sandbox({});
+  await withScriptedServer(11813, [{ text: 'はい' }], async (ep) => {
+    const r = await akari(['-e', ep, 'run', '--no-tools', '-C', a, '-p', 'やあ']);
+    assert.equal(r.code, 0, r.stderr);
+    const id = (await listConversations()).find((c) => c.workspace === a)!.id;
+
+    const wrong = await akari(['-e', ep, 'run', '--conversation', id, '-C', b, '-p', '続けて']);
+    assert.equal(wrong.code, 2);
+    assert.match(wrong.stderr, /では続けられません/);
+    assert.ok(wrong.stderr.includes(`-C ${a}`), '正しいフォルダを案内する');
+
+    const none = await akari(['-e', ep, 'run', '-c', '-C', b, '-p', '続けて']);
+    assert.equal(none.code, 2);
+    assert.match(none.stderr, /続ける会話がありません/);
+  });
+});
+
+test('--no-save なら会話を作らない', async () => {
+  const dir = await sandbox({});
+  await withScriptedServer(11814, [{ text: 'はい' }], async (ep) => {
+    const before = (await listConversations()).length;
+    const r = await akari(['-e', ep, 'run', '--no-save', '--no-tools', '-C', dir, '-p', 'やあ']);
+    assert.equal(r.code, 0, r.stderr);
+    assert.match(r.stdout, /保存しない/);
+    assert.equal((await listConversations()).length, before);
+  });
+});
+
+test('chat も保存され、-c で直近の chat の続きになる', async () => {
+  await withScriptedServer(
+    11815,
+    [{ text: '合言葉は「さくら」。' }, { text: 'さくらです。' }],
+    async (ep) => {
+      const first = await akari(['-e', ep, 'chat', '-p', '合言葉を決めて']);
+      assert.equal(first.code, 0, first.stderr);
+      const chat = (await listConversations()).find((c) => c.kind === 'chat');
+      assert.ok(chat);
+      const second = await akari(['-e', ep, 'chat', '-c', '-p', '合言葉は？']);
+      assert.equal(second.code, 0, second.stderr);
+      assert.match(second.stdout, /さくらです/);
+      assert.equal((await listConversations()).find((c) => c.id === chat.id)?.messageCount, 4);
+    },
+  );
+});
+
+test('会話の表示と、ゴミ箱への移動', async () => {
+  const dir = await sandbox({});
+  await withScriptedServer(11816, [{ text: '表示されるはずの応答' }], async (ep) => {
+    await akari(['-e', ep, 'run', '--no-tools', '-C', dir, '-p', '見せて']);
+    const id = (await listConversations()).find((c) => c.workspace === dir)!.id;
+
+    const show = await akari(['conversations', 'show', id.slice(0, 20)]);
+    assert.equal(show.code, 0, show.stderr);
+    assert.match(show.stdout, /見せて/);
+    assert.match(show.stdout, /表示されるはずの応答/);
+
+    const noConfirm = await akari(['conversations', 'rm', id]);
+    assert.equal(noConfirm.code, 3, '確認できないなら移さない');
+    assert.ok((await listConversations()).some((c) => c.id === id));
+
+    const rm = await akari(['conversations', 'rm', id, '-y']);
+    assert.equal(rm.code, 0, rm.stderr);
+    assert.ok(!(await listConversations()).some((c) => c.id === id));
+    await fs.stat(path.join(home, 'trash', 'conversations', id));
+  });
+});
+
+test('存在しない会話は終了コード2', async () => {
+  const r = await akari(['conversations', 'show', 'ZZZZZZZZ']);
+  assert.equal(r.code, 2);
+  assert.match(r.stderr, /見つかりません/);
+});

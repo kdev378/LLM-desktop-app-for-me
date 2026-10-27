@@ -8,6 +8,10 @@ import { randomBytes } from 'node:crypto';
  */
 const queues = new Map<string, Promise<unknown>>();
 
+export function withFileQueue<T>(file: string, task: () => Promise<T>): Promise<T> {
+  return serialize(path.resolve(file), task);
+}
+
 function serialize<T>(key: string, task: () => Promise<T>): Promise<T> {
   const prev = queues.get(key) ?? Promise.resolve();
   const next = prev.then(task, task);

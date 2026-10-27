@@ -2,7 +2,9 @@ import readline from 'node:readline';
 import {
   createProvider,
   getProviderError,
+  ulid,
   type ChatMessage,
+  type ConversationRecorder,
   type Provider,
   type ReasoningLevel,
 } from '@akari/core';
@@ -15,6 +17,7 @@ import {
 } from '../context.js';
 import { c, out, write, note, isInteractive, formatDuration } from '../term.js';
 import { ExitError, EXIT } from '../exit.js';
+import { chooseConversation, safeSaver, type ConversationChoice } from '../conversation.js';
 
 export type ChatOptions = GlobalOptions & {
   prompt?: string;
@@ -23,11 +26,14 @@ export type ChatOptions = GlobalOptions & {
   maxTokens?: string;
   timeout?: string;
   think?: string;
+  continue?: boolean;
+  conversation?: string;
+  save?: boolean;
 };
 
 /**
  * akari chat — ツールなしの対話。
- * P0 の時点では会話を保存しない。保存は P1（デスクトップの Chat）で入る。
+ * 既定で会話として保存する（docs/spec/04-chat.md）。1往復を1つの実行として記録する。
  */
 export async function chatCommand(opts: ChatOptions): Promise<void> {
   const ctx = await createContext(opts);
@@ -48,8 +54,31 @@ export async function chatCommand(opts: ChatOptions): Promise<void> {
     throw new ExitError(EXIT.usage, '--max-tokens は 1 以上の整数で指定してください。');
   }
 
+  let conversation = await chooseConversation(ctx, opts, {
+    kind: 'chat',
+    workspace: null,
+    settings: {
+      endpointId: endpoint.id,
+      model,
+      ...(opts.system ? { systemPrompt: opts.system } : {}),
+    },
+  });
+  // システムプロンプトは、指定があればそれ、無ければ続きの会話に保存したもの
+  const system = opts.system ?? conversation.source?.header.settings.systemPrompt;
+  if (opts.system && conversation.continued && conversation.target) {
+    await conversation.target.updateSettings({ systemPrompt: opts.system });
+  }
   const messages: ChatMessage[] = [];
-  if (opts.system) messages.push({ role: 'system', content: opts.system });
+  const resetMessages = () => {
+    messages.length = 0;
+    if (system) messages.push({ role: 'system', content: system });
+  };
+  resetMessages();
+  messages.push(...conversation.history);
+  const save = safeSaver();
+  const recorderFor = (choice: ConversationChoice): ConversationRecorder | null =>
+    choice.target ? choice.target.recorder({ model, endpointId: endpoint.id }) : null;
+  let recorder = recorderFor(conversation);
 
   const reasoning = pickReasoning(opts.think, ctx.config.generation.reasoning);
   const params = { temperature, maxTokens, reasoning };
@@ -67,6 +96,8 @@ export async function chatCommand(opts: ChatOptions): Promise<void> {
       ctx.json,
       ctx.quiet,
       endpoint.isExternal,
+      undefined,
+      recorder ? { recorder, save } : undefined,
     );
     if (result.error) throw toExitError(result.error, !ctx.json);
     return;
@@ -85,7 +116,7 @@ export async function chatCommand(opts: ChatOptions): Promise<void> {
       `${endpoint.name}${endpoint.isExternal ? c.yellow(' [外部]') : ''}  ${model}  temperature=${temperature}`,
     ),
   );
-  out(c.dim('この対話は保存されません（保存はデスクトップ版で対応予定）。/help で操作一覧。'));
+  out(c.dim(`${describeChatConversation(conversation)}  /help で操作一覧。`));
   out('');
 
   const rl = readline.createInterface({
@@ -125,9 +156,23 @@ export async function chatCommand(opts: ChatOptions): Promise<void> {
       continue;
     }
     if (input === '/clear') {
-      messages.length = 0;
-      if (opts.system) messages.push({ role: 'system', content: opts.system });
-      out(c.gray('文脈を消しました。'));
+      // 文脈を消す＝新しい会話を始める。前の会話は消さずに残る
+      resetMessages();
+      conversation = await chooseConversation(
+        ctx,
+        { save: opts.save },
+        {
+          kind: 'chat',
+          workspace: null,
+          settings: { endpointId: endpoint.id, model, ...(system ? { systemPrompt: system } : {}) },
+        },
+      );
+      recorder = recorderFor(conversation);
+      out(
+        c.gray(
+          `文脈を消しました。${conversation.target ? `新しい会話 ${conversation.target.id} を始めます（前の会話は残っています）。` : ''}`,
+        ),
+      );
       rl.prompt();
       continue;
     }
@@ -152,6 +197,7 @@ export async function chatCommand(opts: ChatOptions): Promise<void> {
       false,
       endpoint.isExternal,
       generating.signal,
+      recorder ? { recorder, save } : undefined,
     );
     generating = null;
     if (result.error && result.error.kind !== 'aborted') {
@@ -180,10 +226,27 @@ async function runTurn(
   quiet: boolean,
   isExternal: boolean,
   signal?: AbortSignal,
+  record?: {
+    recorder: ConversationRecorder;
+    save: (task: () => Promise<unknown>) => Promise<void>;
+  },
 ): Promise<TurnResult> {
   const started = Date.now();
   let text = '';
   let reasoning = '';
+  // 1往復を1つの実行として記録する。終わり方を run と同じ形で残すため
+  const turnId = ulid();
+  const userText = messages.at(-1)?.content ?? '';
+  let lastInflightAt = Date.now();
+  const saveInflight = async () => {
+    if (!record || Date.now() - lastInflightAt < 1000) return;
+    lastInflightAt = Date.now();
+    await record.save(() => record.recorder.inflight(turnId, { text, reasoning, step: 1 }));
+  };
+  if (record) {
+    await record.save(() => record.recorder.runStarted(turnId));
+    await record.save(() => record.recorder.record(turnId, { role: 'user', text: userText }));
+  }
   let firstTokenAt: number | null = null;
   let waiting: NodeJS.Timeout | null = null;
   const showWaiting = !json && !quiet && process.stdout.isTTY === true;
@@ -232,6 +295,7 @@ async function runTurn(
           }
           text += ev.text;
           if (!json) write(ev.text);
+          await saveInflight();
           break;
         case 'reasoning-delta':
           if (firstTokenAt === null) {
@@ -239,6 +303,7 @@ async function runTurn(
             stopWaiting();
           }
           reasoning += ev.text;
+          await saveInflight();
           break;
         case 'finish': {
           stopWaiting();
@@ -261,6 +326,23 @@ async function runTurn(
             out('');
           }
           messages.push({ role: 'assistant', content: text });
+          if (record) {
+            await record.save(() =>
+              record.recorder.record(turnId, {
+                role: 'assistant',
+                text,
+                ...(reasoning ? { reasoning } : {}),
+                finishReason: ev.reason,
+                ...(ev.usage ? { usage: ev.usage } : {}),
+                durationMs: Date.now() - started,
+                step: 1,
+              }),
+            );
+            await record.save(() => record.recorder.inflight(turnId, null));
+            await record.save(() =>
+              record.recorder.runEnded(turnId, ev.reason === 'aborted' ? 'aborted' : 'done'),
+            );
+          }
           return { text };
         }
         case 'error': {
@@ -283,6 +365,23 @@ async function runTurn(
             out('');
           }
           if (text !== '') messages.push({ role: 'assistant', content: text });
+          if (record) {
+            const aborted = ev.error.kind === 'aborted';
+            await record.save(() =>
+              record.recorder.record(turnId, {
+                role: 'assistant',
+                text,
+                ...(reasoning ? { reasoning } : {}),
+                ...(aborted ? { finishReason: 'aborted' as const } : { error: ev.error }),
+                durationMs: Date.now() - started,
+                step: 1,
+              }),
+            );
+            await record.save(() => record.recorder.inflight(turnId, null));
+            await record.save(() =>
+              record.recorder.runEnded(turnId, aborted ? 'aborted' : 'error'),
+            );
+          }
           return { text, error: ev.error as never };
         }
         default:
@@ -322,4 +421,11 @@ async function readStdinIfPiped(): Promise<string | null> {
   for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
   const text = Buffer.concat(chunks).toString('utf8').trim();
   return text === '' ? null : text;
+}
+
+function describeChatConversation(conv: ConversationChoice): string {
+  if (!conv.target) return '保存しません（--no-save）。';
+  return conv.continued
+    ? `会話 ${conv.target.id} の続き（これまで ${conv.history.length} 件）。`
+    : `会話 ${conv.target.id} として保存します。`;
 }

@@ -34,7 +34,9 @@ import type {
   ProviderError,
   ToolCallRequest,
   Usage,
+  FinishReason,
 } from '../provider/types.js';
+import type { ConversationRecorder } from './recorder.js';
 import type { Logger } from '../diagnostics/logger.js';
 
 /**
@@ -60,6 +62,13 @@ export type SessionOptions = {
   toolsMode?: ToolsMode;
   /** 思考（reasoning）の量。docs/spec/02-provider.md */
   reasoning?: ReasoningLevel;
+  /**
+   * やり取りの記録係（docs/spec/04-chat.md）。省略すると保存しない。
+   * Session はファイルのことを知らず、メッセージができるたびにここへ渡すだけ。
+   */
+  recorder?: ConversationRecorder;
+  /** 記録先の会話。run-start に載せて、呼び出し側が続きを指定できるようにする。 */
+  conversationId?: string;
   projectInstructions?: string;
   conversationInstructions?: string;
   /** 続きから始める場合の既存メッセージ。 */
@@ -73,6 +82,8 @@ export type SessionOptions = {
 const MAX_CALLS_PER_STEP = 8;
 /** 同じツール・同じ引数がこの回数続いたらループとみなす。 */
 const LOOP_THRESHOLD = 3;
+/** 生成中の途中経過を保存する間隔（docs/spec/07-data.md）。 */
+const INFLIGHT_INTERVAL_MS = 1000;
 /** 代替方式で1回の応答から受け付けるブロック数（docs/spec/02-provider.md）。 */
 const MAX_PROMPTED_CALLS_PER_STEP = 3;
 
@@ -102,6 +113,11 @@ export class Session {
   private sessionAllows = new Set<string>();
   /** この実行の中で一度でも断ったか。断った後はコマンドを自動で通さない。 */
   private refusedInRun = false;
+  /** このステップで結果を返した呼び出し。結果の無い呼び出しを残さないため。 */
+  private answered = new Set<string>();
+  private currentStep = 0;
+  /** 保存の失敗を一度知らせたか。 */
+  private saveFailed = false;
   private running = false;
   private aborted = false;
 
@@ -204,7 +220,10 @@ export class Session {
       instructionFiles: instructions.map((i) => i.name),
       toolNames: this.tools.map((t) => t.name),
       toolsMode,
+      ...(this.opts.conversationId ? { conversationId: this.opts.conversationId } : {}),
     };
+    yield* this.persist((r) => r.runStarted(this.runId));
+    yield* this.persist((r) => r.record(this.runId, { role: 'user', text: input }));
 
     if (this.unknownTools.length > 0) {
       yield {
@@ -239,11 +258,18 @@ export class Session {
         break;
       }
       yield { type: 'step-start', step };
+      this.currentStep = step;
+      this.answered = new Set();
 
       let text = '';
+      let reasoning = '';
       let usage: Usage | undefined;
+      let finishReason: FinishReason | undefined;
+      let stepError: ProviderError | undefined;
       const nativeCalls: ToolCallRequest[] = [];
       let failed = false;
+      const stepStartedAt = Date.now();
+      let lastInflightAt = Date.now();
 
       for await (const ev of this.opts.provider.chat(
         {
@@ -254,11 +280,15 @@ export class Session {
         },
         this.controller.signal,
       )) {
-        if (ev.type === 'text-delta') {
-          text += ev.text;
-          yield { type: 'text-delta', text: ev.text };
-        } else if (ev.type === 'reasoning-delta') {
-          yield { type: 'reasoning-delta', text: ev.text };
+        if (ev.type === 'text-delta' || ev.type === 'reasoning-delta') {
+          if (ev.type === 'text-delta') text += ev.text;
+          else reasoning += ev.text;
+          yield { type: ev.type, text: ev.text };
+          // 落ちてもここまでの応答が残るように、途中経過を一定間隔で保存する
+          if (Date.now() - lastInflightAt >= INFLIGHT_INTERVAL_MS) {
+            lastInflightAt = Date.now();
+            yield* this.persist((r) => r.inflight(this.runId, { text, reasoning, step }));
+          }
         } else if (ev.type === 'tool-call') {
           nativeCalls.push({ id: ev.id, name: ev.name, argumentsRaw: ev.argumentsRaw });
         } else if (ev.type === 'notice') {
@@ -266,21 +296,39 @@ export class Session {
           yield { type: 'notice', level: 'warn', message: ev.message };
         } else if (ev.type === 'finish') {
           usage = ev.usage;
+          finishReason = ev.reason;
         } else if (ev.type === 'error') {
           if (ev.error.kind === 'aborted') {
             endReason = 'aborted';
           } else {
             endReason = 'error';
             endError = ev.error;
+            stepError = ev.error;
           }
           failed = true;
           break;
         }
       }
 
-      if (failed) break;
-      if (this.aborted) {
-        endReason = 'aborted';
+      if (failed || this.aborted) {
+        // 失敗・停止した応答も消さずに残す（04-chat.md）。
+        // 停止した途中の本文は、続きを始めたときにも前提になるので会話にも入れる。
+        if (text !== '' || reasoning !== '' || stepError) {
+          if (!stepError && text !== '') this.messages.push({ role: 'assistant', content: text });
+          const durationMs = Date.now() - stepStartedAt;
+          yield* this.persist((r) =>
+            r.record(this.runId, {
+              role: 'assistant',
+              text,
+              ...(reasoning !== '' ? { reasoning } : {}),
+              step,
+              durationMs,
+              ...(stepError ? { error: stepError } : { finishReason: 'aborted' as const }),
+            }),
+          );
+        }
+        yield* this.persist((r) => r.inflight(this.runId, null));
+        if (!failed) endReason = 'aborted';
         break;
       }
 
@@ -313,13 +361,36 @@ export class Session {
         content: text,
         ...(nativeCalls.length > 0 ? { toolCalls: nativeCalls } : {}),
       });
+      {
+        const durationMs = Date.now() - stepStartedAt;
+        const recordedCalls = calls.map(({ id, name, argumentsRaw, origin }) => ({
+          id,
+          name,
+          argumentsRaw,
+          origin,
+        }));
+        yield* this.persist((r) =>
+          r.record(this.runId, {
+            role: 'assistant',
+            text,
+            ...(reasoning !== '' ? { reasoning } : {}),
+            ...(recordedCalls.length > 0 ? { toolCalls: recordedCalls } : {}),
+            ...(finishReason ? { finishReason } : {}),
+            ...(usage ? { usage } : {}),
+            durationMs,
+            step,
+          }),
+        );
+        yield* this.persist((r) => r.inflight(this.runId, null));
+      }
 
       if (promptedErrors.length > 0) {
         for (const e of promptedErrors) yield { type: 'notice', level: 'warn', message: e };
-        this.messages.push({
-          role: 'user',
-          content: `[akari] 次の問題がありました。\n${promptedErrors.join('\n')}`,
-        });
+        const feedback = `[akari] 次の問題がありました。\n${promptedErrors.join('\n')}`;
+        this.messages.push({ role: 'user', content: feedback });
+        yield* this.persist((r) =>
+          r.record(this.runId, { role: 'user', text: feedback, source: 'akari' }),
+        );
         // 読めたブロックが1つも無いときだけ、やり直させる。
         // 読めたものがあるなら、それは実行してから続ける。
         if (calls.length === 0) {
@@ -334,21 +405,17 @@ export class Session {
         break;
       }
 
+      let dropped: PendingCall[] = [];
       if (calls.length > MAX_CALLS_PER_STEP) {
         yield {
           type: 'notice',
           level: 'warn',
           message: `1回の応答でツールが ${calls.length} 件呼ばれました。上限 ${MAX_CALLS_PER_STEP} 件までを実行します。`,
         };
-        const dropped = calls
-          .slice(MAX_CALLS_PER_STEP)
-          .map((c) => c.name)
-          .join(', ');
+        // 上限を超えた分は、下で「実行しませんでした」という結果を付ける。
+        // 利用者メッセージを挟むと、呼び出しの直後に結果が並ばず、次のリクエストが 400 になる。
+        dropped = calls.slice(MAX_CALLS_PER_STEP);
         calls = calls.slice(0, MAX_CALLS_PER_STEP);
-        this.messages.push({
-          role: 'user',
-          content: `[akari] 上限のため次のツールは実行しませんでした: ${dropped}`,
-        });
       }
 
       let abortRequested = false;
@@ -380,14 +447,30 @@ export class Session {
         }
       }
 
+      // 結果の無い呼び出しを残さない。残すと、続きを始めたときにサーバが 400 を返す。
+      for (const call of calls) {
+        if (this.answered.has(call.id)) continue;
+        yield* this.pushToolResult(call, false, '中断のため実行されませんでした。', 'aborted');
+      }
+      for (const call of dropped) {
+        yield* this.pushToolResult(
+          call,
+          false,
+          `1回の応答で呼べる上限（${MAX_CALLS_PER_STEP}件）を超えたため、実行しませんでした。`,
+          'dropped',
+        );
+      }
+
       yield { type: 'step-end', step, ...(usage ? { usage } : {}) };
       if (abortRequested) break;
       if (step === this.opts.maxSteps) endReason = 'max-steps';
     }
 
+    const finalReason: RunEndReason = this.aborted && endReason !== 'loop' ? 'aborted' : endReason;
+    yield* this.persist((r) => r.runEnded(this.runId, finalReason));
     yield {
       type: 'run-end',
-      reason: this.aborted && endReason !== 'loop' ? 'aborted' : endReason,
+      reason: finalReason,
       changedFiles: journal.changedFiles(),
       ...(endError !== undefined ? { error: endError } : {}),
     };
@@ -402,7 +485,7 @@ export class Session {
     if (!tool) {
       const msg = `そのツールはありません: ${call.name}。使えるのは ${this.tools.map((t) => t.name).join(', ')} です。`;
       yield { type: 'tool-result', callId: call.id, name: call.name, ok: false, summary: msg };
-      this.pushToolResult(call, false, msg);
+      yield* this.pushToolResult(call, false, msg);
       return 'ok';
     }
 
@@ -412,7 +495,7 @@ export class Session {
     } catch {
       const msg = `引数がJSONとして読めません: ${call.argumentsRaw.slice(0, 200)}`;
       yield { type: 'tool-result', callId: call.id, name: call.name, ok: false, summary: msg };
-      this.pushToolResult(call, false, msg);
+      yield* this.pushToolResult(call, false, msg);
       return 'ok';
     }
 
@@ -453,7 +536,7 @@ export class Session {
           ok: false,
           summary: check.message,
         };
-        this.pushToolResult(call, false, `${check.message}\n${NO_WORKAROUND}`);
+        yield* this.pushToolResult(call, false, `${check.message}\n${NO_WORKAROUND}`);
         yield* this.markRefused();
         return 'ok';
       }
@@ -467,7 +550,7 @@ export class Session {
         if (hit !== null) {
           const msg = `このコマンドは実行できません（拒否リストの "${hit}" に一致）。`;
           yield { type: 'tool-result', callId: call.id, name: tool.name, ok: false, summary: msg };
-          this.pushToolResult(call, false, `${msg}\n${NO_WORKAROUND}`);
+          yield* this.pushToolResult(call, false, `${msg}\n${NO_WORKAROUND}`);
           yield* this.markRefused();
           return 'ok';
         }
@@ -490,7 +573,7 @@ export class Session {
           ok: false,
           summary: '拒否されました',
         };
-        this.pushToolResult(call, false, msg);
+        yield* this.pushToolResult(call, false, msg);
         yield* this.markRefused();
         return 'ok';
       }
@@ -533,7 +616,7 @@ export class Session {
     } catch (err) {
       const msg = `ツールの実行が失敗しました: ${(err as Error).message}`;
       yield { type: 'tool-result', callId: call.id, name: tool.name, ok: false, summary: msg };
-      this.pushToolResult(call, false, msg);
+      yield* this.pushToolResult(call, false, msg);
       return 'ok';
     }
 
@@ -545,7 +628,7 @@ export class Session {
       summary: result.summary,
       ...(result.change ? { change: result.change } : {}),
     };
-    this.pushToolResult(call, result.ok, result.content);
+    yield* this.pushToolResult(call, result.ok, result.content);
     return 'ok';
   }
 
@@ -636,13 +719,51 @@ export class Session {
     return typeof p === 'string' ? `${name}:${p}` : null;
   }
 
-  private pushToolResult(call: PendingCall, ok: boolean, content: string): void {
+  private async *pushToolResult(
+    call: PendingCall,
+    ok: boolean,
+    content: string,
+    synthetic?: 'aborted' | 'dropped',
+  ): AsyncGenerator<RunEvent, void, void> {
     // 呼ばれ方に合わせて返す。関数呼び出しには tool メッセージ、
     // 本文ブロックには利用者メッセージ。混ぜると相手が解釈できない。
     if (call.origin === 'prompted') {
       this.messages.push({ role: 'user', content: formatPromptedResult(call.name, ok, content) });
     } else {
       this.messages.push({ role: 'tool', toolCallId: call.id, name: call.name, content });
+    }
+    this.answered.add(call.id);
+    const step = this.currentStep;
+    yield* this.persist((r) =>
+      r.record(this.runId, {
+        role: 'tool',
+        toolCallId: call.id,
+        toolName: call.name,
+        ok,
+        content,
+        origin: call.origin,
+        step,
+        ...(synthetic ? { synthetic } : {}),
+      }),
+    );
+  }
+
+  /** 記録係へ渡す。失敗しても実行は止めないが、黙らない（最初の1回を知らせる）。 */
+  private async *persist(
+    task: (r: ConversationRecorder) => Promise<void>,
+  ): AsyncGenerator<RunEvent, void, void> {
+    const recorder = this.opts.recorder;
+    if (!recorder) return;
+    try {
+      await task(recorder);
+    } catch (err) {
+      if (this.saveFailed) return;
+      this.saveFailed = true;
+      yield {
+        type: 'notice',
+        level: 'warn',
+        message: `会話の保存に失敗しました。実行は続けますが、記録が欠けます: ${(err as Error).message}`,
+      };
     }
   }
 }

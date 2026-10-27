@@ -8,6 +8,7 @@ Work のエージェント実行、Code 画面、CLI は**すべてこのエン�
 ```ts
 type SessionOptions = {
   conversationId: string;
+  recorder?: ConversationRecorder;   // やり取りの記録係（04-chat.md）。Session はファイルを知らない
   workspace: string | null;      // 作業フォルダの絶対パス。null ならツールなし
   tools: ToolName[];             // 許可するツール
   permissionMode: "ask" | "autoEdit" | "full";

@@ -20,6 +20,11 @@ import {
 } from './commands/config.js';
 import { runCommand } from './commands/run.js';
 import { runsCommand, diffCommand, undoCommand } from './commands/runs.js';
+import {
+  conversationsListCommand,
+  conversationsShowCommand,
+  conversationsRmCommand,
+} from './commands/conversations.js';
 
 /**
  * akari CLI。仕様: docs/spec/10-cli.md
@@ -47,6 +52,8 @@ program
   akari doctor                        接続と設定の状態を見る
   akari chat                          対話する（ファイルは触らない）
   akari run "テストを通して"           エージェント実行（作業フォルダの中だけ）
+  akari run -c "READMEも直して"        この作業フォルダの直近の会話の続き
+  akari conversations                 保存した会話の一覧
   akari diff                          直前の実行が何を変えたか
   akari undo                          直前の実行を元に戻す
   echo "要約して" | akari chat         標準入力から
@@ -68,6 +75,9 @@ program
   .option('--tools-mode <mode>', 'auto / native / prompted / both。判定を無視して渡し方を決める')
   .option('--timeout <秒>', 'この実行だけ、最初の応答までの待ち上限を変える')
   .option('--think <量>', 'auto / off / low / medium / high。思考（reasoning）の量')
+  .option('-c, --continue', 'この作業フォルダの直近の会話の続きから')
+  .option('--conversation <ID>', '指定した会話の続きから（前方一致でよい）')
+  .option('--no-save', 'この実行のやり取りを保存しない')
   .action(async (args: string[] | undefined, o) =>
     run(() => runCommand(args ?? [], { ...globals(), ...o, noTools: o.tools === false })),
   );
@@ -77,6 +87,23 @@ program
   .description('過去の実行の一覧')
   .option('--limit <n>', '表示件数。既定20')
   .action(async (o) => run(() => runsCommand({ ...globals(), ...o })));
+
+const conversations = program
+  .command('conversations')
+  .description('保存した会話の一覧と操作')
+  .option('--limit <n>', '表示件数。既定20')
+  .action(async (o) => run(() => conversationsListCommand({ ...globals(), ...o })));
+conversations
+  .command('show <ID>')
+  .description('会話の中身を表示する（ID は前方一致でよい）')
+  .option('--reasoning', '思考の出力も表示する')
+  .option('--full', '道具の結果を省略せずに表示する')
+  .action(async (id, o) => run(() => conversationsShowCommand(id, { ...globals(), ...o })));
+conversations
+  .command('rm <ID>')
+  .description('会話をゴミ箱へ移す（30日後に消える）')
+  .option('-y, --yes', '確認しない')
+  .action(async (id, o) => run(() => conversationsRmCommand(id, { ...globals(), ...o })));
 
 program
   .command('diff')
@@ -106,6 +133,9 @@ program
   .option('--max-tokens <整数>', '生成の上限トークン数')
   .option('--timeout <秒>', 'この実行だけ、最初の応答までの待ち上限を変える')
   .option('--think <量>', 'auto / off / low / medium / high。思考（reasoning）の量')
+  .option('-c, --continue', '直近の chat の続きから')
+  .option('--conversation <ID>', '指定した会話の続きから（前方一致でよい）')
+  .option('--no-save', 'この対話を保存しない')
   .action(async (o) => run(() => chatCommand({ ...globals(), ...o })));
 
 program

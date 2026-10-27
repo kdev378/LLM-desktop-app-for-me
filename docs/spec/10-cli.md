@@ -32,16 +32,38 @@ akari -C ~/proj "READMEを直して"   # 作業フォルダを指定
 | `--permission <mode>` | `ask` | `ask` / `auto-edit` / `full` |
 | `-y, --yes` | 偽 | `--permission auto-edit` の別名 |
 | `--max-steps <n>` | 25 | ステップ上限 |
-| `--continue` | 偽 | 直前の会話の続きから |
-| `--conversation <id>` | — | 指定した会話の続きから |
+| `-c, --continue` | 偽 | この作業フォルダの直近の会話の続きから。値を取らない（取ると `-c "続けて"` のプロンプトをIDと取り違える） |
+| `--conversation <id>` | — | 指定した会話の続きから。ID は前方一致（一意に決まる長さ）でよい |
+| `--no-save` | 偽 | この実行のやり取りを保存しない |
 | `--no-tools` | 偽 | ツールを渡さない（純粋な生成） |
 | `--json` | 偽 | NDJSON でイベントを出す |
 | `-q, --quiet` | 偽 | 最終応答だけを出す |
 | `--no-color` | 端末依存 | 色を使わない |
 
+続きから始める会話の作業フォルダが、今の作業フォルダと違えば**断る**（終了コード2）。
+前の会話は前のフォルダのファイルを前提にしているため。正しいフォルダを `-C` で案内する。
+
+既定で、やり取りを会話として保存する（`04-chat.md`・`07-data.md`）。
+保存されるのは、入力、応答、思考の出力、道具の呼び出しと結果（ファイルの中身やコマンドの出力を含む）、
+失敗した応答。暗号化はしない。
+
 ### `akari chat`
 ツールなしの対話。ファイルを触らない前提の相談用。
-`--model` / `--endpoint` / `--continue` が使える。
+`--model` / `--endpoint` / `-c, --continue`（直近の chat の続き） / `--conversation <id>` / `--no-save` が使える。
+既定で保存する。
+
+### `akari conversations`
+保存した会話の一覧と操作。
+
+```sh
+akari conversations                  # 一覧（更新の新しい順、既定20件）。--limit <n> / --json
+akari conversations show <id>        # 中身を表示。--reasoning で思考も、--full で道具の結果を省略せずに
+akari conversations rm <id>          # ゴミ箱へ移す。-y で確認なし
+```
+
+- ID は前方一致でよい。複数に当たれば候補を出して終了コード2
+- `rm` は `<root>/trash/conversations/` へ移すだけで、消さない。ゴミ箱は30日で自動的に消える
+- 読めない見出しや行があれば、一覧・表示の最後に知らせる（黙って飛ばさない）
 
 ### `akari diff`
 直前の実行が行ったファイル変更を、統一差分で出す。

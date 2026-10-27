@@ -23,6 +23,7 @@ import {
 } from '../context.js';
 import { c, out, write, note, isInteractive, formatDuration } from '../term.js';
 import { ExitError, EXIT } from '../exit.js';
+import { chooseConversation } from '../conversation.js';
 
 /**
  * akari run — エージェント実行。仕様: docs/spec/10-cli.md
@@ -42,6 +43,9 @@ export type RunOptions = GlobalOptions & {
   toolsMode?: string;
   timeout?: string;
   think?: string;
+  continue?: boolean;
+  conversation?: string;
+  save?: boolean;
 };
 
 export async function runCommand(promptArgs: string[], opts: RunOptions): Promise<void> {
@@ -129,10 +133,24 @@ export async function runCommand(promptArgs: string[], opts: RunOptions): Promis
     throw new ExitError(EXIT.usage, '--max-steps は 1〜200 の整数で指定してください。');
   }
 
+  // どの会話に書くか。続きなら、これまでのやり取りを読む（docs/spec/10-cli.md）
+  const conversation = await chooseConversation(ctx, opts, {
+    kind: 'agent',
+    workspace: workspace.root,
+    settings: { endpointId: endpoint.id, model },
+  });
+
   const session = Session.create({
     provider,
     model,
     workspace,
+    history: conversation.history,
+    ...(conversation.target
+      ? {
+          recorder: conversation.target.recorder({ model, endpointId: endpoint.id }),
+          conversationId: conversation.target.id,
+        }
+      : {}),
     permissionMode,
     toolNames,
     maxSteps,
@@ -187,6 +205,7 @@ export async function runCommand(promptArgs: string[], opts: RunOptions): Promis
             }
             if (ev.instructionFiles.length > 0)
               out(c.dim(`指示ファイル: ${ev.instructionFiles.join(', ')}`));
+            out(c.dim(describeConversation(conversation)));
             out('');
           }
           break;
@@ -257,6 +276,8 @@ export async function runCommand(promptArgs: string[], opts: RunOptions): Promis
             }
             if (ev.error)
               out(c.red(`エラー: ${typeof ev.error === 'string' ? ev.error : ev.error.message}`));
+            if (conversation.target && !ctx.quiet)
+              out(c.dim(`続けるには: akari run -c "…"  （会話 ${conversation.target.id}）`));
           }
           break;
         }
@@ -335,6 +356,17 @@ function describeToolsMode(m: ToolsMode): string {
   if (m === 'native') return '関数呼び出し';
   if (m === 'prompted') return '本文ブロック（代替方式）';
   return '両対応';
+}
+
+function describeConversation(conv: Awaited<ReturnType<typeof chooseConversation>>): string {
+  if (!conv.target) {
+    return conv.continued
+      ? `会話: ${conv.source?.id} の続き（--no-save のため保存しない）`
+      : '会話: 保存しない（--no-save）';
+  }
+  return conv.continued
+    ? `会話: ${conv.target.id} の続き（これまで ${conv.history.length} 件）`
+    : `会話: ${conv.target.id}（新規）`;
 }
 
 function describeMode(m: PermissionMode): string {

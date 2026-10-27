@@ -45,6 +45,8 @@ export type RunEvent =
       toolNames: string[];
       /** 道具の渡し方（docs/spec/02-provider.md）。 */
       toolsMode: ToolsMode;
+      /** 記録先の会話（保存するときだけ）。続きを指定するのに使う。 */
+      conversationId?: string;
     }
   | { type: 'step-start'; step: number }
   | { type: 'text-delta'; text: string }

@@ -10,20 +10,36 @@
 type Message = {
   id: string;                 // ULID。時刻順に並ぶ
   parentId: string | null;    // 枝構造。null は会話の先頭
-  role: "system" | "user" | "assistant" | "tool";
+  role: "user" | "assistant" | "tool";   // system は保存しない（毎回作り直す）
   content: ContentPart[];
-  reasoning?: string;         // 思考出力を返すモデル用。本文と混ぜない
-  toolCallId?: string;        // role:"tool" のとき
+  reasoning?: string;         // 思考出力を返すモデル用。本文と混ぜない。保存するが、モデルへは送り返さない
   toolCalls?: ToolCallRecord[]; // role:"assistant" のとき
+  // role:"tool" のとき
+  toolCallId?: string;
+  toolName?: string;
+  ok?: boolean;
+  origin?: "native" | "prompted";  // どの方式で呼ばれたか。送るときはこの形で再現する
   meta: {
     createdAt: string;        // ISO8601
+    runId?: string;           // どの実行で作られたか（akari runs の ID）
+    step?: number;
     model?: string;
     endpointId?: string;
-    usage?: { prompt: number; completion: number };  // 不明なら省略。推定値を入れない
+    usage?: { prompt: number; completion: number; total: number };  // 不明なら省略。推定値を入れない
     finishReason?: FinishReason;
     error?: ProviderError;    // 失敗した応答も消さずに残す
     durationMs?: number;
+    source?: "akari";         // Akari がモデルへ伝えた文（形式の誤りの指摘など）。利用者の発言ではない
+    synthetic?: "aborted" | "dropped";  // 実行されなかった呼び出しに Akari が付けた結果
+    interrupted?: "process-exit";       // プロセスが落ちて途中で止まった応答
   };
+};
+
+type ToolCallRecord = {
+  id: string;
+  name: string;
+  argumentsRaw: string;       // モデルが出したそのまま
+  origin: "native" | "prompted";
 };
 
 type ContentPart =
@@ -36,19 +52,40 @@ type ContentPart =
 
 会話は列ではなく**木**として保存し、「今表示している道筋」を別に持つ。
 
+保存は見出し（`<id>.json`）とメッセージ（`<id>.messages.jsonl`、1行1件の追記のみ）に分ける。
+理由と書き込みの規則は `07-data.md`。
+
 ```ts
-type Conversation = {
+// <id>.json
+type ConversationHeader = {
   schemaVersion: 1;
   id: string;
+  kind: "chat" | "agent";     // akari chat か、akari run（エージェント実行）か
   title: string;              // 自動生成 or 手動
+  titleSource: "auto" | "manual";
+  workspace: string | null;   // エージェント実行の作業フォルダ（実体パス）。chat は null
   projectId: string | null;
-  messages: Record<string, Message>;   // id -> Message。圧縮しても消さない
   activeLeafId: string | null;         // 現在の末端。ここから親を辿ったものが表示される
+  messageCount: number;                // 一覧の表示用。正本はメッセージのファイル
   settings: ConversationSettings;      // endpoint/model/params/systemPrompt の上書き
+  runs: RunSummary[];                  // この会話で行った実行
   compactions: Compaction[];           // 文脈の圧縮の記録（16-context.md）
   createdAt: string; updatedAt: string;
 };
+
+type RunSummary = {
+  runId: string;
+  startedAt: string;
+  endedAt?: string;
+  /** 終わり方。成功した実行だけを数えたい用途（将来のスキル化など）のために残す。 */
+  reason?: "done" | "aborted" | "max-steps" | "error" | "denied" | "loop" | "interrupted";
+  model: string;
+  endpointId: string;
+};
+// <id>.messages.jsonl … Message を1行1件
 ```
+
+知らない項目は、見出しでもメッセージでも消さずに残す。
 
 - 利用者が過去の発言を**編集**すると、同じ `parentId` を持つ新しいメッセージを作り、
   `activeLeafId` をそちらへ移す。**古い枝は消さない。**
@@ -63,6 +100,13 @@ type Conversation = {
 1. 入力欄の内容と添付から `user` メッセージを作り、即座に画面へ出す（保存もこの時点で行う）。
 2. `activeLeafId` から根へ辿り、逆順にして API 用の `messages` を作る。
    先頭にシステムプロンプト（会話 > プロジェクト > 全体 の優先順位で1つに解決したもの）を置く。
+   組み立ての規則:
+   - 思考出力（`reasoning`）は送らない
+   - `origin: "prompted"` の道具の結果は、利用者メッセージ（`[akari-tool-result]`）として送る。
+     `native` は `role: "tool"` として送る。今の接続先の方式に関係なく、呼ばれたときの形で再現する
+   - 失敗した応答（`meta.error` があるもの）は送らない
+   - 結果の無い道具の呼び出しがあれば、「実行されませんでした」という結果を補う
+     （無いまま送ると、OpenAI互換APIは 400 を返す）
 3. `assistant` の空メッセージを作り、`text-delta` を追記していく。
 4. `finish` で確定。`error` なら `meta.error` を入れて確定させ、**消さない**。
 5. 会話ファイルを保存する。

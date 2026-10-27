@@ -134,6 +134,31 @@ export {
   type JournalFile,
 } from './agent/journal.js';
 export { Session, type SessionOptions } from './agent/session.js';
+export type {
+  ConversationRecorder,
+  RecordedMessage,
+  RecordedToolCall,
+  InflightPartial,
+} from './agent/recorder.js';
+
+// 会話の保存（docs/spec/04-chat.md / 07-data.md）
+export {
+  ConversationStore,
+  Conversation,
+  CONVERSATION_SCHEMA_VERSION,
+  textOf,
+  type ConversationHeader,
+  type ConversationKind,
+  type ConversationSettings,
+  type StoredMessage,
+  type StoredToolCall,
+  type MessageMeta,
+  type ContentPart,
+  type RunSummary,
+  type LoadProblem,
+  type NewMessage,
+} from './store/conversations.js';
+export { toApiMessages } from './store/replay.js';
 export {
   approvalOptions,
   type RunEvent,
