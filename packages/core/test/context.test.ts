@@ -31,7 +31,9 @@ const fence = (obj: unknown) => '```akari-digest\n' + JSON.stringify(obj) + '\n`
 const isDigestCall = (req: ChatRequest) =>
   req.messages[0]?.content.startsWith('あなたは作業記録の要約係') === true;
 
-type Step = { text: string } | { tool: string; args: unknown };
+type Call = { tool: string; args: unknown };
+/** calls は1手で複数の道具を呼ぶ（モデルがまとめて読むとき）。 */
+type Step = { text: string } | Call | { calls: Call[] };
 
 /**
  * 作業の呼び出しには台本どおりに、圧縮の呼び出しには digest() の返す文字列で答える。
@@ -73,12 +75,15 @@ function provider(
         yield { type: 'finish', reason: 'stop', ...u };
         return;
       }
-      yield {
-        type: 'tool-call',
-        id: `call_${turn}`,
-        name: step.tool,
-        argumentsRaw: JSON.stringify(step.args),
-      };
+      const calls = 'calls' in step ? step.calls : [step];
+      for (const [i, c] of calls.entries()) {
+        yield {
+          type: 'tool-call',
+          id: `call_${turn}_${i}`,
+          name: c.tool,
+          argumentsRaw: JSON.stringify(c.args),
+        };
+      }
       yield { type: 'finish', reason: 'tool_calls', ...u };
     },
   };
@@ -449,6 +454,44 @@ test('圧縮できない直近の大きな出力は、送るときだけ切り�
   const sent = work[1]!.messages.find((m) => m.role === 'tool')!;
   assert.match(sent.content, /文字を省きました/);
   assert.ok(sent.content.length < 10000);
+});
+
+test('1手でまとめて読んで入りきらないときは、段階的に短く切り詰めて続ける', async () => {
+  // Ling が文脈長 8000 で5ファイルを1手で読み、4000字の切り詰めでも入らず止まっていた（2026-10-27）
+  const file = Array.from({ length: 120 }, (_, i) => `${i}行目 ${'かきくけこ'.repeat(10)}`).join(
+    '\n',
+  );
+  const names = ['a', 'b', 'c', 'd', 'e'].map((n) => `${n}.txt`);
+  const { workspace, home } = await setup(Object.fromEntries(names.map((n) => [n, file])));
+  const { p, work } = provider([
+    { calls: names.map((n) => ({ tool: 'read_file', args: { path: n } })) },
+    { text: '終わり' },
+  ]);
+  const session = Session.create({
+    provider: p,
+    model: 'm',
+    workspace,
+    root: home,
+    permissionMode: 'full',
+    limits: { toolOutputLimitBytes: 100000 },
+    context: { settings: settings(), windowTokens: 8000, endpointId: 'ep_ctx' },
+  });
+  const events = await run(session, '5つ読んで');
+  const end = events.find((e) => e.type === 'run-end') as Extract<RunEvent, { type: 'run-end' }>;
+  assert.equal(end.reason, 'done', String(end.error ?? ''));
+  const notice = events.find((e) => e.type === 'notice' && /切り詰めました/.test(e.message));
+  assert.ok(notice && notice.type === 'notice');
+  assert.match(notice.message, /短いもので (2000|1000) 字/, '4000字で諦めずにさらに短くした');
+  const sent = work[1]!.messages.filter((m) => m.role === 'tool');
+  assert.equal(sent.length, 5);
+  assert.ok(
+    sent.every((m) => m.content.length <= 2300),
+    '5件とも短くして送った',
+  );
+  // 圧縮が起きていないので recall は渡っていない。渡っていない道具を案内しない
+  assert.ok(sent.every((m) => !/recall_read/.test(m.content)));
+  assert.match(sent[0]!.content, /read_file の offset と limit/);
+  assertValidForApi(work[1]!.messages);
 });
 
 test('どうしても入りきらないときは、送らずに止める（理由つき）', async () => {

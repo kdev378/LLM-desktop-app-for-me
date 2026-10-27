@@ -102,13 +102,13 @@ export function selectForCompaction(
  * 送るときだけ、長い道具の出力を先頭と末尾を残して切る。生の記録は変えない。
  * 切ったことは本文に明記する（16-context.md「それでも入りきらないとき」）。
  */
-export function truncateMiddle(text: string, maxChars: number): string {
+export function truncateMiddle(text: string, maxChars: number, hint: string): string {
   if (text.length <= maxChars) return text;
   const headLen = Math.floor(maxChars * 0.6);
   const tailLen = Math.max(0, maxChars - headLen);
   const omitted = text.length - headLen - tailLen;
   return (
     `${text.slice(0, headLen)}\n\n[akari] 文脈に入りきらないため、ここで ${omitted} 文字を省きました。` +
-    `原文は recall_read で読めます。\n\n${text.slice(text.length - tailLen)}`
+    `${hint}\n\n${text.slice(text.length - tailLen)}`
   );
 }

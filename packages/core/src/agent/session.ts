@@ -101,13 +101,23 @@ const MAX_CALLS_PER_STEP = 8;
 const LOOP_THRESHOLD = 3;
 /** 生成中の途中経過を保存する間隔（docs/spec/07-data.md）。 */
 const INFLIGHT_INTERVAL_MS = 1000;
-/** 入りきらないときに、道具の出力を送るときだけ切り詰める長さ（文字）。 */
-const TRUNCATE_CHARS = 4000;
+/**
+ * 入りきらないときに、道具の出力を送るときだけ切り詰める長さ（文字）。段階的に短くする。
+ * 1段で諦めると、1手で何ファイルもまとめて読んだときに止まってしまう（2026-10-27 実測）。
+ */
+const TRUNCATE_STEPS = [4000, 2000, 1000];
 /** 実測と概算の比として信じる範囲。 */
 const CALIBRATION_MIN = 0.5;
 const CALIBRATION_MAX = 2;
 /** 文脈長のこの割合を超えたら、応答の余地が無いので送らない。 */
 const HARD_LIMIT_RATIO = 0.95;
+
+/** 切り詰めたときにモデルへ添える一文。recall が渡っていないのに recall を案内しない。 */
+function truncateHint(tools: ToolSpec[]): string {
+  return tools.some((t) => t.name === 'recall_read')
+    ? '原文は recall_read で読めます。'
+    : '必要なら read_file の offset と limit で、分けて読み直してください。';
+}
 
 type PromptBase = {
   instructions: Awaited<ReturnType<typeof loadInstructionFiles>>;
@@ -167,8 +177,8 @@ export class Session {
   private compaction: Compaction | null = null;
   /** 圧縮した生の記録の ID。送らないが、消さない。 */
   private covered = new Set<string>();
-  /** 送るときだけ先頭と末尾に切り詰める道具の出力（それでも入りきらないとき）。 */
-  private truncated = new Set<string>();
+  /** 送るときだけ先頭と末尾に切り詰める道具の出力と、その長さ（文字）。それでも入りきらないとき。 */
+  private truncated = new Map<string, number>();
   /** 実測（usage.prompt）と概算の比。分かれば概算をこれで補正する。 */
   private calibration: number | null = null;
   private thresholdWarned = false;
@@ -795,7 +805,9 @@ export class Session {
     const visible = this.entries
       .filter((e) => !this.covered.has(e.id))
       .map((e) =>
-        this.truncated.has(e.id) ? { ...e, text: truncateMiddle(e.text, TRUNCATE_CHARS) } : e,
+        this.truncated.has(e.id)
+          ? { ...e, text: truncateMiddle(e.text, this.truncated.get(e.id)!, truncateHint(tools)) }
+          : e,
       );
     const messages: ChatMessage[] = [
       { role: 'system', content: system },
@@ -888,23 +900,28 @@ export class Session {
         if (this.aborted || !over(req)) return req;
       }
 
-      // それでも多いなら、送るときだけ大きい道具の出力から切り詰める（生の記録は変えない）
-      const big = this.entries
-        .filter((e) => e.role === 'tool' && !this.covered.has(e.id) && !this.truncated.has(e.id))
-        .filter((e) => e.text.length > TRUNCATE_CHARS)
-        .sort((a, b) => b.text.length - a.text.length);
-      const cut: string[] = [];
-      for (const e of big) {
-        this.truncated.add(e.id);
-        cut.push(e.toolName ?? 'tool');
-        req = this.buildRequest(base);
-        if (!over(req)) break;
+      // それでも多いなら、送るときだけ大きい道具の出力から切り詰める（生の記録は変えない）。
+      // 段階的に短くし、閾値を下回ったところで止める
+      const cut = new Set<string>();
+      let shortest = 0;
+      outer: for (const limit of TRUNCATE_STEPS) {
+        const big = this.entries
+          .filter((e) => e.role === 'tool' && !this.covered.has(e.id))
+          .filter((e) => e.text.length > limit && (this.truncated.get(e.id) ?? Infinity) > limit)
+          .sort((a, b) => b.text.length - a.text.length);
+        for (const e of big) {
+          this.truncated.set(e.id, limit);
+          cut.add(e.id);
+          shortest = limit;
+          req = this.buildRequest(base);
+          if (!over(req)) break outer;
+        }
       }
-      if (cut.length > 0) {
+      if (cut.size > 0) {
         yield {
           type: 'notice',
           level: 'warn',
-          message: `文脈に入りきらないため、道具の出力 ${cut.length} 件を、送るときだけ先頭と末尾を残して切り詰めました（生の記録はそのまま）。`,
+          message: `文脈に入りきらないため、道具の出力 ${cut.size} 件を、送るときだけ先頭と末尾を残して切り詰めました（短いもので ${shortest} 字。生の記録はそのまま）。`,
         };
       }
       if (!over(req)) return req;
