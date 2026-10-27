@@ -17,7 +17,14 @@
 
 ### 呼び出し方
 
-リポジトリの中で `pnpm build` した後、次のどれかで呼ぶ。
+`apps/cli/dist/` は組み立てた結果なので Git には入っていない。リポジトリの直下で先に組み立てる:
+
+```sh
+pnpm install   # 初回と、依存が変わったとき
+pnpm build     # apps/cli/dist/index.js ができる
+```
+
+そのあと、次のどれかで呼ぶ。
 
 ```sh
 node apps/cli/dist/index.js …          # そのまま
@@ -640,7 +647,7 @@ echo "終了コード: $?"
 10秒版には入っていない。試すなら先に更新する。
 
 ```sh
-git pull && pnpm build
+git pull && pnpm install && pnpm build
 ```
 
 ### 11-1. 思考の量を変える
