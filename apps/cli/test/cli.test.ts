@@ -264,10 +264,11 @@ async function withScriptedServer<T>(
   port: number,
   script: unknown[],
   fn: (endpointName: string) => Promise<T>,
+  serverEnv: Record<string, string> = {},
 ): Promise<T> {
   const proc = spawn(process.execPath, [MOCK, String(port)], {
     stdio: 'ignore',
-    env: { ...process.env, AKARI_MOCK_SCRIPT: JSON.stringify(script) },
+    env: { ...process.env, AKARI_MOCK_SCRIPT: JSON.stringify(script), ...serverEnv },
   });
   try {
     const deadline = Date.now() + 5000;
@@ -545,6 +546,27 @@ test('--no-tools のとき、ファイルを触れないことを実行前に伝
     assert.match(r.stdout, /ファイルの読み書きとコマンド実行はできません/);
     assert.equal(await fs.readFile(path.join(dir, 'a.txt'), 'utf8'), 'x\n');
   });
+});
+
+test('読み込まれていないモデルを「読込済」と表示しない', async () => {
+  // 模擬サーバの LM Studio 固有の口は、1番目だけ loaded、残りは not-loaded を返す。
+  // 部分一致で判定すると "not-loaded" まで読込済になる（実際にそうなっていた）。
+  await withScriptedServer(
+    11811,
+    [],
+    async (ep) => {
+      const r = await akari(['-e', ep, 'models']);
+      assert.equal(r.code, 0);
+      const row = (id: string) => r.stdout.split('\n').find((l) => l.includes(id)) ?? '';
+      assert.match(row('mock-chat-7b'), /読込済/);
+      assert.match(row('mock-coder-14b'), /未読込/);
+      assert.match(row('nomic-embed-text-v1'), /未読込/);
+    },
+    {
+      AKARI_MOCK_LMSTUDIO: '1',
+      AKARI_MOCK_MODELS: 'mock-chat-7b,mock-coder-14b,nomic-embed-text-v1',
+    },
+  );
 });
 
 test('モデルはサブコマンドの前でも後ろでも指定できる', async () => {

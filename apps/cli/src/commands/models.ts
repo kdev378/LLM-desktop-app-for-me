@@ -3,11 +3,17 @@ import { createContext, pickEndpoint, type GlobalOptions } from '../context.js';
 import { out, table, c } from '../term.js';
 import { ExitError, EXIT } from '../exit.js';
 
-/** 読み込み状態。返さないサーバでは空欄にする（分からないことを断定しない）。 */
+/**
+ * 読み込み状態。返さないサーバでは空欄にする（分からないことを断定しない）。
+ * 完全一致で見る。部分一致だと "not-loaded" まで「読込済」になる。
+ * 知らない値はそのまま出す（推測で読込済／未読込に寄せない）。
+ */
 function describeState(state: string | undefined): string {
   if (state === undefined) return '';
-  if (/loaded/i.test(state)) return c.green('読込済');
-  return c.dim('未読込');
+  const s = state.toLowerCase();
+  if (s === 'loaded') return c.green('読込済');
+  if (s === 'not-loaded' || s === 'not_loaded' || s === 'unloaded') return c.dim('未読込');
+  return c.dim(state);
 }
 
 /** akari models — 接続先のモデル一覧。 */
