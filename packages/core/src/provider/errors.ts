@@ -39,9 +39,11 @@ export function classifyHttp(
     return {
       ...base,
       kind: 'rate_limited',
+      // 429 は「混雑」だけでなく、無料枠などの回数上限でも返る。
+      // 上限なら待っても直らないので、どちらもありうると書く。
       message: retryAfterMs
-        ? `混雑しています。${Math.ceil(retryAfterMs / 1000)}秒後に再試行してください。`
-        : '混雑しています。しばらく待ってから再試行してください。',
+        ? `利用回数の上限に達したか、混雑しています（429）。${Math.ceil(retryAfterMs / 1000)}秒後に再試行してください。`
+        : '利用回数の上限に達したか、混雑しています（429）。上限なら、待っても回数が戻るまでは通りません。',
       ...(retryAfterMs !== undefined ? { retryAfterMs } : {}),
     };
   }
