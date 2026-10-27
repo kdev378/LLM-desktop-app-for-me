@@ -4,7 +4,7 @@ import { ulid, shortId } from '../util/ids.js';
 import { ChangeJournal, type UndoResult } from './journal.js';
 import { Workspace } from '../tools/workspace.js';
 import { selectTools, toolDefinitions, findTool } from '../tools/registry.js';
-import { commandScope, matchesDenied } from '../tools/command.js';
+import { commandScope, matchesDenied, findDeleteCommand } from '../tools/command.js';
 import {
   DEFAULT_LIMITS,
   type ToolContext,
@@ -76,6 +76,14 @@ const LOOP_THRESHOLD = 3;
 /** 代替方式で1回の応答から受け付けるブロック数（docs/spec/02-provider.md）。 */
 const MAX_PROMPTED_CALLS_PER_STEP = 3;
 
+/**
+ * 断ったときにモデルへ必ず添える一文。
+ * 「別の方法を検討して」と返していたら、delete_file を断られたモデルが rm で消した。
+ * 仕様: docs/spec/05-agent.md「断られた後の迂回」
+ */
+const NO_WORKAROUND =
+  '同じことを別の手段（コマンドなど）で行わないでください。必要なら、何をしたいかを利用者に説明して終えてください。';
+
 /** ツール呼び出しと、それがどう来たか。 */
 type PendingCall = ToolCallRequest & { origin: 'native' | 'prompted' };
 
@@ -92,6 +100,8 @@ export class Session {
   private controller = new AbortController();
   private pending = new Map<string, (d: ApprovalDecision) => void>();
   private sessionAllows = new Set<string>();
+  /** この実行の中で一度でも断ったか。断った後はコマンドを自動で通さない。 */
+  private refusedInRun = false;
   private running = false;
   private aborted = false;
 
@@ -160,6 +170,7 @@ export class Session {
   }
 
   private async *runLoop(input: string): AsyncGenerator<RunEvent, void, void> {
+    this.refusedInRun = false;
     const journal = await ChangeJournal.create(this.runId, this.workspace.root, this.opts.root);
     this.journal = journal;
 
@@ -442,7 +453,8 @@ export class Session {
           ok: false,
           summary: check.message,
         };
-        this.pushToolResult(call, false, check.message);
+        this.pushToolResult(call, false, `${check.message}\n${NO_WORKAROUND}`);
+        yield* this.markRefused();
         return 'ok';
       }
     }
@@ -455,7 +467,8 @@ export class Session {
         if (hit !== null) {
           const msg = `このコマンドは実行できません（拒否リストの "${hit}" に一致）。`;
           yield { type: 'tool-result', callId: call.id, name: tool.name, ok: false, summary: msg };
-          this.pushToolResult(call, false, msg);
+          this.pushToolResult(call, false, `${msg}\n${NO_WORKAROUND}`);
+          yield* this.markRefused();
           return 'ok';
         }
       }
@@ -463,13 +476,13 @@ export class Session {
 
     const need = this.needsApproval(tool.risk, tool.name, args);
     if (need.required) {
-      const decision = yield* this.askApproval(call, tool, preview, need.scope);
+      const decision = yield* this.askApproval(call, tool, preview, need.scope, need.reason);
       yield { type: 'approval-resolved', callId: call.id, decision };
       if (decision.kind === 'abort') return 'abort';
       if (decision.kind === 'deny') {
         const msg = decision.feedback
-          ? `利用者が拒否しました: ${decision.feedback}`
-          : '利用者が拒否しました。別の方法を検討してください。';
+          ? `利用者が拒否しました: ${decision.feedback}\n${NO_WORKAROUND}`
+          : `利用者が拒否しました。${NO_WORKAROUND}`;
         yield {
           type: 'tool-result',
           callId: call.id,
@@ -478,6 +491,7 @@ export class Session {
           summary: '拒否されました',
         };
         this.pushToolResult(call, false, msg);
+        yield* this.markRefused();
         return 'ok';
       }
       if (decision.kind === 'allow-session') this.sessionAllows.add(decision.scope);
@@ -540,6 +554,7 @@ export class Session {
     tool: ToolSpec,
     preview: ToolPreview | undefined,
     scope: string | null,
+    reason?: string,
   ): AsyncGenerator<RunEvent, ApprovalDecision, void> {
     const promise = new Promise<ApprovalDecision>((resolve) => {
       this.pending.set(call.id, resolve);
@@ -549,11 +564,25 @@ export class Session {
       callId: call.id,
       name: tool.name,
       risk: tool.risk,
-      prompt: describeApproval(tool, preview),
+      prompt: reason
+        ? `${reason}\n${describeApproval(tool, preview)}`
+        : describeApproval(tool, preview),
       options: approvalOptions(scope),
       ...(preview ? { preview } : {}),
     };
     return promise;
+  }
+
+  /** 断ったことを覚える。初回だけ、以後コマンドを自動で通さないことを知らせる。 */
+  private *markRefused(): Generator<RunEvent, void, void> {
+    if (this.refusedInRun) return;
+    this.refusedInRun = true;
+    yield {
+      type: 'notice',
+      level: 'warn',
+      message:
+        '断られた操作があったため、この実行の残りではコマンドを自動で実行しません（承認を求めます）。',
+    };
   }
 
   /**
@@ -564,10 +593,32 @@ export class Session {
     risk: Risk,
     name: string,
     args: unknown,
-  ): { required: boolean; scope: string | null } {
+  ): { required: boolean; scope: string | null; reason?: string } {
     const mode = this.opts.permissionMode;
     const scope = this.scopeFor(name, args);
+
+    // 削除系のコマンドは、どのモードでも毎回聞く（allow-session にもしない）。
+    // コマンドで消したものは記録の外で、undo で戻せないため。
+    const command = name === 'run_command' ? (args as { command?: unknown }).command : undefined;
+    const deletes = typeof command === 'string' ? findDeleteCommand(command) : null;
+    if (deletes !== null) {
+      return {
+        required: true,
+        scope: null,
+        reason: `ファイルを削除するコマンド（${deletes}）です。コマンドで消したファイルは akari undo で戻せないため、確認します。`,
+      };
+    }
+
     if (scope && this.sessionAllows.has(scope)) return { required: false, scope };
+
+    // 一度断った後は、コマンドを自動で通さない（断られた後の迂回を止める）
+    if (name === 'run_command' && this.refusedInRun) {
+      return {
+        required: true,
+        scope,
+        reason: 'この実行で一度断られた操作があったため、コマンドは自動では実行しません。',
+      };
+    }
 
     if (name === 'delete_file') return { required: true, scope: null };
     if (risk === 'read') return { required: false, scope };

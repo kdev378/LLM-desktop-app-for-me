@@ -14,6 +14,7 @@ import {
   truncateMiddle,
   commandScope,
   matchesDenied,
+  findDeleteCommand,
 } from '../dist/index.js';
 
 async function ctx(files: Record<string, string> = {}) {
@@ -239,5 +240,58 @@ test('既定の拒否リストが git の履歴書き換えを塞ぐ', async () 
     'git merge main',
   ]) {
     assert.equal(matchesDenied(cmd, denied), null, `${cmd} は通るはず`);
+  }
+});
+
+// ---------------- 削除系のコマンド ----------------
+
+/**
+ * run_command で消したファイルは undo で戻せない。full でも聞くために見つける。
+ * 仕様: docs/spec/05-agent.md「削除系のコマンド」
+ */
+
+test('削除系のコマンドを見つける', () => {
+  const cases: Array<[string, string]> = [
+    ['rm README.md', 'rm'],
+    ['rm -rf build', 'rm'],
+    ['/bin/rm a', 'rm'],
+    ['sudo rm a', 'rm'],
+    ['sudo -u root rm a', 'rm'],
+    ['FOO=1 rm a', 'rm'],
+    ['env -i rm a', 'rm'],
+    ['ls && rm a', 'rm'],
+    ['ls; rm a', 'rm'],
+    ['ls || rm a', 'rm'],
+    ['find . -name x | xargs rm', 'rm'],
+    ['echo $(rm a)', 'rm'],
+    ['rmdir build', 'rmdir'],
+    ['unlink a', 'unlink'],
+    ['shred -u a', 'shred'],
+    ['git clean -fd', 'git clean'],
+    ['git rm a.txt', 'git rm'],
+    ['git -C sub rm a.txt', 'git rm'],
+    ['find . -name "*.tmp" -delete', 'find -delete'],
+    ['find . -name x -exec rm {} \;', 'find -exec rm'],
+    ['bash -c "rm -rf x"', 'rm'],
+    ["sh -c 'ls && rm x'", 'rm'],
+  ];
+  for (const [cmd, want] of cases) {
+    assert.equal(findDeleteCommand(cmd), want, cmd);
+  }
+});
+
+test('削除しないコマンドを削除と見なさない', () => {
+  for (const cmd of [
+    'ls -la',
+    'git status',
+    'git commit -m "rm old file"',
+    'grep -r rm src',
+    'echo rm',
+    'cat firm.txt',
+    'npm run rm-cache',
+    'find . -name "*.ts"',
+    'npm test',
+  ]) {
+    assert.equal(findDeleteCommand(cmd), null, cmd);
   }
 });

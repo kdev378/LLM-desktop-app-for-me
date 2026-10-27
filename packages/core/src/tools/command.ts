@@ -32,6 +32,92 @@ export function matchesDenied(command: string, deniedCommands: string[]): string
   return null;
 }
 
+/** 削除をするコマンド。`run_command` で消したものは undo で戻せないので、full でも聞く。 */
+const DELETE_COMMANDS = new Set(['rm', 'rmdir', 'unlink', 'shred', 'srm', 'trash', 'trash-put']);
+/** 削除をする git のサブコマンド。 */
+const DELETE_GIT_SUBCOMMANDS = new Set(['clean', 'rm']);
+/** 前に付いても本体ではないもの。飛ばして次の語を見る。 */
+const PREFIX_WORDS = new Set(['sudo', 'env', 'xargs', 'command', 'exec', 'nohup', 'time', 'nice']);
+
+/**
+ * 削除系のコマンドを含むか。含めば見つけた名前（例 "rm"、"git clean"、"find -delete"）を返す。
+ * 仕様: docs/spec/05-agent.md「削除系のコマンド」
+ *
+ * 名前で見つける仕組みで、完全な防壁ではない（`python -c` などは見抜けない）。
+ * 取りこぼしより誤検知のほうが害が小さい（承認が1回増えるだけ）ので、広めに拾う。
+ */
+export function findDeleteCommand(command: string): string | null {
+  // つなぎ記号で区切って、各部分の先頭の語を見る
+  const segments = command.split(/&&|\|\||;|\||\n|\$\(|`|\(|\)/);
+  for (const segment of segments) {
+    const words = segment
+      .trim()
+      .split(/\s+/)
+      .filter((w) => w !== '');
+    let i = 0;
+    let prefixed = false;
+    // 前置きの語（sudo など）と、変数代入（A=1）を飛ばす
+    while (i < words.length) {
+      const w = words[i]!;
+      if (PREFIX_WORDS.has(basename(w))) {
+        prefixed = true;
+        i += 1;
+        while (i < words.length && words[i]!.startsWith('-')) i += 1;
+        continue;
+      }
+      if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(w)) {
+        i += 1;
+        continue;
+      }
+      break;
+    }
+    const head = words[i] === undefined ? '' : basename(stripQuotes(words[i]!));
+    if (DELETE_COMMANDS.has(head)) return head;
+    // sudo -u root rm … のように、前置きの語のオプションが値を取ると本体の位置が分からない。
+    // 前置きがあったときは、残りの語に削除コマンドの名前があれば拾う（誤検知は承認が1回増えるだけ）。
+    if (prefixed) {
+      const found = words.slice(i).find((w) => DELETE_COMMANDS.has(basename(stripQuotes(w))));
+      if (found) return basename(stripQuotes(found));
+    }
+    if (head === 'git') {
+      // 値を取る全体オプション（git -C dir rm …）は、値ごと飛ばす
+      let j = i + 1;
+      while (j < words.length && words[j]!.startsWith('-')) {
+        j += GIT_VALUE_OPTIONS.has(words[j]!) ? 2 : 1;
+      }
+      const sub = words[j];
+      if (sub && DELETE_GIT_SUBCOMMANDS.has(sub)) return `git ${sub}`;
+    }
+    if (head === 'find') {
+      if (words.includes('-delete')) return 'find -delete';
+      // find … -exec rm {} \;
+      if (words.some((w) => DELETE_COMMANDS.has(basename(stripQuotes(w))))) return 'find -exec rm';
+    }
+    // bash -c "rm …" は、引用の中身を同じ規則で見る
+    if (SHELLS.has(head)) {
+      const c = words.indexOf('-c', i + 1);
+      if (c >= 0) {
+        const inner = findDeleteCommand(stripQuotes(words.slice(c + 1).join(' ')));
+        if (inner) return inner;
+      }
+    }
+  }
+  return null;
+}
+
+const SHELLS = new Set(['sh', 'bash', 'zsh', 'dash', 'ksh', 'fish']);
+/** 値を取る git の全体オプション（`--git-dir=x` のような = 付きは1語なので含めない）。 */
+const GIT_VALUE_OPTIONS = new Set(['-C', '-c', '--git-dir', '--work-tree', '--namespace']);
+
+function basename(word: string): string {
+  const i = word.lastIndexOf('/');
+  return i >= 0 ? word.slice(i + 1) : word;
+}
+
+function stripQuotes(word: string): string {
+  return word.replace(/^['"]+|['"]+$/g, '');
+}
+
 /**
  * 「同じものとみなす」範囲。承認の allow-session はこの単位で効く。
  * `npm test` を許可しても `npm publish` は再度聞く。

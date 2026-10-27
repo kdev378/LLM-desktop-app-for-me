@@ -270,7 +270,11 @@ export async function runCommand(promptArgs: string[], opts: RunOptions): Promis
 
   if (deniedForNonInteractive) {
     throw new ExitError(EXIT.denied, '承認が得られなかったため、一部の操作を行いませんでした。', {
-      hint: '自動で進めるには --permission auto-edit などを明示してください。',
+      // full でも聞く操作（削除、断られた後のコマンド）がある。そこで「full にして」と言わない
+      hint:
+        permissionMode === 'full'
+          ? '削除と、断られた後のコマンドは full でも確認が要ります。対話できる端末で実行してください。'
+          : '自動で進めるには --permission auto-edit などを明示してください。',
       silent: ctx.json,
     });
   }

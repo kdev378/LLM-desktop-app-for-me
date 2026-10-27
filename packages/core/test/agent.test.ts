@@ -454,3 +454,138 @@ test('実行の一覧が新しい順に取れる', async () => {
   assert.equal(runs.length, 2);
   assert.ok(runs[0]! > runs[1]!, '新しい順');
 });
+
+// ---------------- 削除と、断られた後の迂回 ----------------
+
+/**
+ * 実際に OpenRouter の実モデルで、delete_file を断られたモデルが直後に
+ * run_command で rm を実行し、full だったため通ってファイルが消えた。
+ * コマンドで消したものは undo で戻せない。
+ * 仕様: docs/spec/05-agent.md「削除系のコマンド」「断られた後の迂回」
+ */
+
+const denyAll = () => ({ kind: 'deny' as const });
+
+test('full でも、削除系のコマンドは承認を求める。断ればファイルは残る', async () => {
+  const { workspace, home, root } = await setup({ 'README.md': '# 残る\n' });
+  const session = Session.create({
+    provider: script(
+      { tool: 'run_command', args: { command: 'rm README.md' } },
+      { text: '消せませんでした。' },
+    ),
+    model: 'fake-model',
+    workspace,
+    root: home,
+    permissionMode: 'full',
+  });
+  const { events } = await run(session, 'README を消して', denyAll);
+  const req = events.find((e) => e.type === 'approval-request') as Extract<
+    RunEvent,
+    { type: 'approval-request' }
+  >;
+  assert.ok(req, 'full でも聞く');
+  assert.match(req.prompt, /削除するコマンド（rm）/, 'なぜ聞くのかを言う');
+  assert.ok(
+    !req.options.some((o) => o.decision.kind === 'allow-session'),
+    '削除は「この実行中は許可」にしない',
+  );
+  assert.equal(await fs.readFile(path.join(root, 'README.md'), 'utf8'), '# 残る\n');
+});
+
+test('delete_file を断られた後に rm へ切り替えても、消せない（報告された経路）', async () => {
+  const { workspace, home, root } = await setup({ 'README.md': '# 残る\n' });
+  const session = Session.create({
+    provider: script(
+      { tool: 'delete_file', args: { path: 'README.md' } },
+      { tool: 'run_command', args: { command: 'rm README.md' } },
+      { text: 'だめでした。' },
+    ),
+    model: 'fake-model',
+    workspace,
+    root: home,
+    permissionMode: 'full',
+  });
+  await run(session, 'README を消して', denyAll);
+  assert.equal(await fs.readFile(path.join(root, 'README.md'), 'utf8'), '# 残る\n');
+});
+
+test('一度断った後は、削除でないコマンドも自動で通さない', async () => {
+  // 名前で見抜けない書き方（python -c など）で消されるのを、断った後は止める
+  const { workspace, home } = await setup({ 'a.txt': 'a\n' });
+  const session = Session.create({
+    provider: script(
+      { tool: 'delete_file', args: { path: 'a.txt' } },
+      { tool: 'run_command', args: { command: 'echo ok' } },
+      { text: '終わり' },
+    ),
+    model: 'fake-model',
+    workspace,
+    root: home,
+    permissionMode: 'full',
+  });
+  const { events } = await run(session, 'やって', denyAll);
+  const requests = events.filter((e) => e.type === 'approval-request') as Array<
+    Extract<RunEvent, { type: 'approval-request' }>
+  >;
+  assert.equal(requests.length, 2, 'delete_file と、その後の echo の両方で聞く');
+  assert.match(requests[1]!.prompt, /一度断られた操作があったため/);
+  assert.ok(
+    events.some((e) => e.type === 'notice' && /自動で実行しません/.test(e.message)),
+    '切り替わったことを知らせる',
+  );
+});
+
+test('断ったときにモデルへ「別の手段で行わない」と伝える', async () => {
+  const { workspace, home } = await setup({ 'a.txt': 'a\n' });
+  const provider = script(
+    { tool: 'delete_file', args: { path: 'a.txt' } },
+    { text: 'わかりました' },
+  );
+  const session = Session.create({
+    provider,
+    model: 'fake-model',
+    workspace,
+    root: home,
+    permissionMode: 'full',
+  });
+  await run(session, 'やって', denyAll);
+  const toolMsg = provider.calls[1]!.messages.find((m) => m.role === 'tool');
+  assert.match(toolMsg!.content, /別の手段（コマンドなど）で行わないでください/);
+  assert.doesNotMatch(toolMsg!.content, /別の方法を検討/, '迂回を促さない');
+});
+
+test('断られていなければ、full では普通のコマンドはそのまま通る', async () => {
+  const { workspace, home } = await setup();
+  const session = Session.create({
+    provider: script({ tool: 'run_command', args: { command: 'echo ok' } }, { text: '終わり' }),
+    model: 'fake-model',
+    workspace,
+    root: home,
+    permissionMode: 'full',
+  });
+  const { events, end } = await run(session, 'やって', denyAll);
+  assert.ok(!events.some((e) => e.type === 'approval-request'), 'full の意味は保つ');
+  assert.equal(end.reason, 'done');
+});
+
+test('迂回の制限は、次の実行では元に戻る', async () => {
+  const { workspace, home } = await setup({ 'a.txt': 'a\n' });
+  const session = Session.create({
+    provider: script(
+      { tool: 'delete_file', args: { path: 'a.txt' } },
+      { text: 'だめでした' },
+      { tool: 'run_command', args: { command: 'echo ok' } },
+      { text: '終わり' },
+    ),
+    model: 'fake-model',
+    workspace,
+    root: home,
+    permissionMode: 'full',
+  });
+  await run(session, '1回目', denyAll);
+  const second = await run(session, '2回目', denyAll);
+  assert.ok(
+    !second.events.some((e) => e.type === 'approval-request'),
+    '前の実行で断ったことを持ち越さない',
+  );
+});

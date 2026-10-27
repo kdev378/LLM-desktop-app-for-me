@@ -123,7 +123,7 @@ export {
   truncateMiddle,
   DEFAULT_IGNORE_DIRS,
 } from './tools/walk.js';
-export { commandScope, matchesDenied } from './tools/command.js';
+export { commandScope, matchesDenied, findDeleteCommand } from './tools/command.js';
 export {
   ChangeJournal,
   pruneBackups,
