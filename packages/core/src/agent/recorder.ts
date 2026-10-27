@@ -11,7 +11,11 @@ import type { RunEndReason } from './events.js';
 
 export type RecordedToolCall = ToolCallRequest & { origin: 'native' | 'prompted' };
 
-export type RecordedMessage =
+/**
+ * 記録する1件。`id` は実行エンジンが振る（ULID）。保存しない場合も同じ ID で
+ * 生の記録を持つので、圧縮の根拠（sources）を指せる。
+ */
+export type RecordedMessage = { id: string } & (
   | {
       role: 'user';
       text: string;
@@ -39,7 +43,8 @@ export type RecordedMessage =
       /** 実行されなかった呼び出しに Akari が付けた結果。 */
       synthetic?: 'aborted' | 'dropped';
       step: number;
-    };
+    }
+);
 
 export type InflightPartial = { text: string; reasoning: string; step: number };
 

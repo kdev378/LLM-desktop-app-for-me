@@ -158,7 +158,8 @@ export {
   type LoadProblem,
   type NewMessage,
 } from './store/conversations.js';
-export { toApiMessages } from './store/replay.js';
+export { toApiMessages, toTranscript } from './store/replay.js';
+export { buildApiMessages, type TranscriptEntry } from './agent/transcript.js';
 export {
   approvalOptions,
   type RunEvent,

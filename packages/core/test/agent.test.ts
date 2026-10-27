@@ -9,6 +9,7 @@ import {
   ChangeJournal,
   ConversationStore,
   toApiMessages,
+  toTranscript,
   type RunEvent,
   type ChatMessage,
   type ConversationRecorder,
@@ -680,7 +681,7 @@ test('保存した会話から続きを始めると、前のやり取りがモ�
     model: 'fake-model',
     workspace,
     root: home,
-    history: toApiMessages(reopened.thread()),
+    transcript: toTranscript(reopened.thread()),
     recorder: reopened.recorder({ model: 'fake-model', endpointId: 'ep_fake' }),
   });
   await run(second, '合言葉は？');
@@ -798,4 +799,65 @@ test('保存に失敗しても実行は続け、失敗したことを1回だけ�
     (e) => e.type === 'notice' && /会話の保存に失敗しました/.test(e.message),
   );
   assert.equal(notices.length, 1);
+});
+
+test('その場で続けても、保存した会話から続けても、モデルへ送る内容は同じ', async () => {
+  // 途中で止まった応答・失敗・道具の結果・本文ブロックの指摘など、食い違いやすいものを混ぜる
+  const steps = () => [
+    { tool: 'read_file', args: { path: 'a.txt' } },
+    { text: '読みました。' },
+    { tool: 'list_dir', args: { path: '.' } },
+    { text: '一覧も見ました。' },
+  ];
+  const { workspace, home } = await setup({ 'a.txt': 'a\n' });
+
+  // その場で続ける（同じ Session に2回送る）
+  const p1 = script(...(steps() as Scripted[]));
+  const sentInline = recordingSent(p1);
+  const inline = Session.create({
+    provider: p1,
+    model: 'fake-model',
+    workspace,
+    root: home,
+    permissionMode: 'full',
+  });
+  await run(inline, '1回目');
+  await run(inline, '2回目');
+
+  // 保存して、開き直して続ける
+  const store = new ConversationStore(home);
+  const conv = await store.create({ kind: 'agent', workspace: workspace.root });
+  const p2 = script(...(steps() as Scripted[]));
+  const sentSaved = recordingSent(p2);
+  const first = Session.create({
+    provider: p2,
+    model: 'fake-model',
+    workspace,
+    root: home,
+    permissionMode: 'full',
+    recorder: conv.recorder({ model: 'fake-model', endpointId: 'ep_fake' }),
+  });
+  await run(first, '1回目');
+  const reopened = await store.open(conv.id);
+  const second = Session.create({
+    provider: p2,
+    model: 'fake-model',
+    workspace,
+    root: home,
+    permissionMode: 'full',
+    transcript: toTranscript(reopened.thread()),
+  });
+  await run(second, '2回目');
+
+  // 道具の呼び出しIDは実行ごとに違うので、比べる前にそろえる
+  const normalize = (msgs: ChatMessage[]) =>
+    JSON.stringify(msgs.slice(1)).replace(/call_[0-9a-z_]+/g, 'CALL');
+  assert.equal(sentInline.length, sentSaved.length);
+  for (let i = 0; i < sentInline.length; i++) {
+    assert.equal(
+      normalize(sentSaved[i]!),
+      normalize(sentInline[i]!),
+      `${i}回目の呼び出しで食い違う`,
+    );
+  }
 });

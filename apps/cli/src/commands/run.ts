@@ -144,7 +144,7 @@ export async function runCommand(promptArgs: string[], opts: RunOptions): Promis
     provider,
     model,
     workspace,
-    history: conversation.history,
+    transcript: conversation.transcript,
     ...(conversation.target
       ? {
           recorder: conversation.target.recorder({ model, endpointId: endpoint.id }),
@@ -365,7 +365,7 @@ function describeConversation(conv: Awaited<ReturnType<typeof chooseConversation
       : '会話: 保存しない（--no-save）';
   }
   return conv.continued
-    ? `会話: ${conv.target.id} の続き（これまで ${conv.history.length} 件）`
+    ? `会話: ${conv.target.id} の続き（これまで ${conv.transcript.length} 件）`
     : `会話: ${conv.target.id}（新規）`;
 }
 

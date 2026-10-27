@@ -183,12 +183,12 @@ export class Conversation {
     return out.reverse();
   }
 
-  /** 今の末端の子として1件足す。 */
-  async append(input: NewMessage): Promise<StoredMessage> {
+  /** 今の末端の子として1件足す。ID を渡せばそれを使う（実行エンジンが振った ID）。 */
+  async append(input: NewMessage, opts: { id?: string } = {}): Promise<StoredMessage> {
     this.assertWritable();
     const message: StoredMessage = {
       ...input,
-      id: ulid(),
+      id: opts.id ?? ulid(),
       parentId: this.header.activeLeafId,
       meta: { ...input.meta, createdAt: new Date().toISOString() },
     };
@@ -260,7 +260,7 @@ export class Conversation {
       inflight: (runId, partial) =>
         this.setInflight(partial === null ? null : { ...partial, runId, ...opts }),
       record: async (runId, m) => {
-        await this.append(fromRecorded(m, runId, opts));
+        await this.append(fromRecorded(m, runId, opts), { id: m.id });
       },
     };
   }

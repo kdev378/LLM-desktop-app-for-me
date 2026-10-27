@@ -9,6 +9,7 @@ Work のエージェント実行、Code 画面、CLI は**すべてこのエン�
 type SessionOptions = {
   conversationId: string;
   recorder?: ConversationRecorder;   // やり取りの記録係（04-chat.md）。Session はファイルを知らない
+  transcript?: TranscriptEntry[];     // 続きから始めるときの、これまでの生の記録（ID つき）
   workspace: string | null;      // 作業フォルダの絶対パス。null ならツールなし
   tools: ToolName[];             // 許可するツール
   permissionMode: "ask" | "autoEdit" | "full";
@@ -17,6 +18,11 @@ type SessionOptions = {
   model: string;
 };
 ```
+
+Session は**生の記録の列**（`TranscriptEntry[]`。1件ずつ ID つき）を正本として持ち、
+モデルを呼ぶたびに、そこからシステムプロンプトと送るメッセージを組み立てる（`buildApiMessages`）。
+保存した会話から続けるときも同じ関数で組み立てるので、その場で続けた場合と送る内容が食い違わない。
+ID は圧縮の根拠（`16-context.md` の `sources`）として指すのに使う。
 
 1回の `Session.send()` が1つの **Run**。Run は次を繰り返す。
 

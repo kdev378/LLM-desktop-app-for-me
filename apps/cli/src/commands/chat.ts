@@ -245,7 +245,9 @@ async function runTurn(
   };
   if (record) {
     await record.save(() => record.recorder.runStarted(turnId));
-    await record.save(() => record.recorder.record(turnId, { role: 'user', text: userText }));
+    await record.save(() =>
+      record.recorder.record(turnId, { id: ulid(), role: 'user', text: userText }),
+    );
   }
   let firstTokenAt: number | null = null;
   let waiting: NodeJS.Timeout | null = null;
@@ -329,6 +331,7 @@ async function runTurn(
           if (record) {
             await record.save(() =>
               record.recorder.record(turnId, {
+                id: ulid(),
                 role: 'assistant',
                 text,
                 ...(reasoning ? { reasoning } : {}),
@@ -369,6 +372,7 @@ async function runTurn(
             const aborted = ev.error.kind === 'aborted';
             await record.save(() =>
               record.recorder.record(turnId, {
+                id: ulid(),
                 role: 'assistant',
                 text,
                 ...(reasoning ? { reasoning } : {}),

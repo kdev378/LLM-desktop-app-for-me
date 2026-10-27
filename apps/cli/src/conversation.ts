@@ -3,8 +3,10 @@ import {
   getProviderError,
   isAkariError,
   toApiMessages,
+  toTranscript,
   tildify,
   type ChatMessage,
+  type TranscriptEntry,
   type Conversation,
   type ConversationKind,
   type ConversationSettings,
@@ -28,8 +30,10 @@ export type ConversationOptions = {
 export type ConversationChoice = {
   /** 書き込む先。--no-save なら null。 */
   target: Conversation | null;
-  /** 続きを始めるときの、これまでのやり取り（システムプロンプトは含まない）。 */
+  /** 続きを始めるときの、これまでのやり取り（モデルへ送る形。chat 用。システムプロンプトは含まない）。 */
   history: ChatMessage[];
+  /** 続きを始めるときの、これまでの生の記録（run 用。実行エンジンが組み立てる）。 */
+  transcript: TranscriptEntry[];
   /** 続きから始めたか。 */
   continued: boolean;
   /** 読んだ会話（続きの場合）。保存しなくても設定の引き継ぎに使う。 */
@@ -100,7 +104,8 @@ export async function chooseConversation(
     ? toApiMessages(source.thread(), { dropFailedTurns: init.kind === 'chat' })
     : [];
   const target = !save ? null : (source ?? (await store.create(init)));
-  return { target, history, continued: source !== null, source };
+  const transcript = source ? toTranscript(source.thread()) : [];
+  return { target, history, transcript, continued: source !== null, source };
 }
 
 async function openOrExit(store: ConversationStore, id: string): Promise<Conversation> {
