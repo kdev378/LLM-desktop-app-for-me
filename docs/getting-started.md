@@ -12,13 +12,23 @@
 
 ## 準備
 
+`akari` 本体（`apps/cli/dist/index.js`）は、ソースから組み立てて作るファイルなので Git には入っていない。
+取ってきた直後は無いのが正常。リポジトリの直下で組み立てる:
+
 ```sh
-pnpm install
-pnpm build
+pnpm install   # 必要な部品を入れる（初回と、依存が変わったとき）
+pnpm build     # apps/cli/dist/index.js ができる
+node apps/cli/dist/index.js --version   # 「0.1.0 (dev)」と出れば準備完了
+```
+
+`git pull` で新しくしたときも、組み立て直さないと古いまま動く:
+
+```sh
+git pull && pnpm install && pnpm build
 ```
 
 以降、`node apps/cli/dist/index.js` が `akari` コマンドにあたる。
-短くしたいなら `alias akari="node $PWD/apps/dist/index.js"`（パスは各自の環境に合わせる）。
+短くしたいなら、リポジトリの直下で `alias akari="node $PWD/apps/cli/dist/index.js"`。
 
 ## 本物のローカルLLMに繋ぐ
 
@@ -177,7 +187,9 @@ akari run --tools-mode prompted "直して"   # 本文のブロックだけ
 akari run --tools-mode both "直して"       # 両方（判定を待たない）
 ```
 
-`full` でも、作業フォルダの外と拒否リストのコマンドは通りません。
+`full` でも、ファイルの道具は作業フォルダの外に触れず、削除は必ず確認を求めます。
+ただし**コマンド（`run_command`）は作業フォルダに閉じ込められていない**ので、
+秘密のあるフォルダでは `full` を使わないこと。詳しくは [commands.md の「権限モード」](commands.md#権限モード)。
 
 ## いま使えるコマンド
 
@@ -190,8 +202,10 @@ akari run --tools-mode both "直して"       # 両方（判定を待たない�
 | `config list/get/set` | 設定の確認と変更（範囲外の値は変更せずに拒否する） |
 | `models` | モデル一覧 |
 | `chat` | 対話。ファイルは触らない |
-| `run` | エージェント実行。作業フォルダの中だけ |
+| `run` | エージェント実行。会話は保存され、`-c` で続きから |
 | `diff` / `undo` / `runs` | 実行が変えたものの確認・取り消し・一覧 |
+| `conversations` | 保存した会話の一覧・表示・削除 |
+| `digest` / `recall` | 文脈の圧縮版を見る・圧縮した生の記録を探す |
 | `doctor` | 状態の確認。`--export` で診断の書き出し |
 
 `serve`（ハーネスAPI）/ `mcp` / `index` / `web` は未実装。
@@ -239,6 +253,6 @@ bash tools/verify-local-llm.sh http://localhost:11434/v1
 
 ```sh
 pnpm typecheck      # 型検査
-pnpm test           # 全テスト（core 99件 + CLI 21件）
+pnpm test           # 全テスト
 pnpm format         # 整形
 ```
