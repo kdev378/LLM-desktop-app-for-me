@@ -29,7 +29,7 @@ P9 仕上げと配布
 
 ---
 
-## P0 — 接続【完了。ただし実機未確認】
+## P0 — 接続【完了。LM Studio と OpenRouter で実機確認済み】
 
 `@akari/core` の config / provider、CLI の `models` / `chat` / `doctor` / `config`。
 
@@ -39,8 +39,13 @@ P9 仕上げと配布
 - [x] サーバへ到達できないとき `unreachable` に分類される（実測）
 - [x] トークン受信後の切断で、受信済みを残し再試行しない（模擬サーバ）
 - [x] `stream: true` を無視して一括JSONを返すサーバでも本文が出る（模擬サーバ）
-- [ ] **Ollama / llama.cpp / LM Studio / vLLM の4種の実機で `/models` と生成が動く（未実施）**
-- [ ] **実機でのツール呼び出しストリーム形式（未実施。`02-provider.md` の未解決の仮定は残ったまま）**
+- [x] LM Studio の実機で `/models` と生成が動く（2026-09、M1 MacBook Air、Agents-A1-4B / LFM2.5。`testing.md` の 1〜3）
+- [x] OpenRouter（OpenAI互換のクラウドAPI）で `/models`・生成・ツール呼び出し・思考の分離が動く
+  （2026-10-27、無料モデル4体: cohere/north-mini-code、poolside/laguna-s-2.1、
+  dots-studio/dots-3-note-preview、nvidia/nemotron-3-ultra-550b-a55b）
+- [ ] **Ollama / llama.cpp / vLLM の実機（未実施）**
+- [ ] **ローカルサーバでのツール呼び出しストリーム形式**。LM Studio は判定で LFM2.5 が
+  `tool_calls` を返すところまで確認。実行（`testing.md` の 4 以降）は未実施
 - [ ] `Ctrl+C` で対話モードの生成が止まる（対話端末が要るため自動テスト未実施）
 
 模擬サーバ `tools/mock-llm-server.mjs` は本物の代わりにならない。
