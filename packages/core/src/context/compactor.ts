@@ -77,6 +77,9 @@ export async function compact(req: CompactRequest): Promise<CompactResult> {
           `圧縮版の ${result.unknownSources} 項目が、存在しない ID を根拠に挙げていました。その項目の根拠は空にしています。`,
         );
       }
+      if (result.bareItems > 0) {
+        notes.push(`圧縮版の ${result.bareItems} 項目に根拠の ID が付いていませんでした。中身はそのまま残しています。`);
+      }
       continue;
     }
     // 黙って捨てない。機械的な要約で残す（劣った圧縮であることは呼び出し側が表示する）
@@ -89,7 +92,7 @@ export async function compact(req: CompactRequest): Promise<CompactResult> {
 }
 
 type ChunkResult =
-  | { ok: true; digest: Digest; unknownSources: number }
+  | { ok: true; digest: Digest; unknownSources: number; bareItems: number }
   | { ok: false; reason: CompactionFallback; detail: string };
 
 async function digestChunk(req: CompactRequest, previous: Digest, chunk: Unit[]): Promise<ChunkResult> {

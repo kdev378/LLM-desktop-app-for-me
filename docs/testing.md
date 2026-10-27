@@ -742,8 +742,23 @@ akari conversations rm <ID>                                    # 確認のあと
 
 早めに圧縮が起きるようにしてから、ファイルを何度も読ませる。
 
+**どの設定が効くかは、そのモデルの文脈長が分かっているかで変わる。** 実行の最初に出る `文脈:` の行で確かめる。
+
+```
+文脈: 長さ 32,768 / 約19,660〜22,937トークンを超えたら圧縮（context.compactAtRatio 0.7 …）   ← 文脈長が分かっている
+文脈: 長さ不明 / 約12,000トークンを超えたら圧縮（context.compactAtTokens）                    ← 分からない
+```
+
+- 文脈長が分かっている（LM Studio・OpenRouter はふつうこちら）→ **`compactAtTokens` は効かない。**
+  いちばん簡単なのは、文脈長を小さく入れ直すこと（試し終わったら元に戻す）:
+  ```sh
+  akari config endpoints probe -m <モデルID> --context 8000
+  ```
+  または割合を下げる: `akari config set context.compactAtRatio 0.3`（文脈長が大きいモデルでは、これでも届かないことがある）
+- 文脈長が分からない → `akari config set context.compactAtTokens 3000`
+
 ```sh
-akari config set context.compactAtTokens 3000
+akari config endpoints probe -m <モデルID> --context 8000
 akari config set context.keepRecentTurns 1
 cd /tmp/akari-sandbox
 for i in 1 2 3 4 5; do seq 1 300 | sed "s/^/$i: 行 /" > part$i.txt; done
@@ -771,12 +786,17 @@ akari run -c "part1.txt の合言葉は何だった？" -m <モデルID>
 **期待**: `recall` で「圧縮済み」の印付きで見つかる。続きでは、モデルが圧縮版か `recall_search` を使って
 「りんごパイ」と答える（ファイルを読み直して答えてもよいが、読み直さずに答えられれば recall が効いている）。
 
-終わったら設定を戻す:
+終わったら設定を戻す（文脈長は、元の値を `akari models` で確かめて入れ直す）:
 
 ```sh
+akari config endpoints probe -m <モデルID> --context <元の文脈長>
+akari config set context.compactAtRatio 0.7
 akari config set context.compactAtTokens 12000
 akari config set context.keepRecentTurns 3
 ```
+
+**読み取りの上限に注意**: `read_file` は既定で2000行までしか読まない。それより長いファイルで試すと、
+読まれなかった部分は圧縮の対象にも入らない。
 
 ---
 

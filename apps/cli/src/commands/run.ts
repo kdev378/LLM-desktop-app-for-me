@@ -5,6 +5,7 @@ import {
   Session,
   createProvider,
   resolveToolsMode,
+  compactThreshold,
   updateEndpoint,
   ALL_TOOL_NAMES,
   READ_ONLY_TOOL_NAMES,
@@ -133,6 +134,9 @@ export async function runCommand(promptArgs: string[], opts: RunOptions): Promis
     throw new ExitError(EXIT.usage, '--max-steps は 1〜200 の整数で指定してください。');
   }
 
+  // そのモデルの文脈長（判定や --context で分かっていれば）。圧縮の閾値が変わる
+  const windowTokens = endpoint.capabilities.byModel?.[model]?.contextTokens ?? null;
+
   // どの会話に書くか。続きなら、これまでのやり取りを読む（docs/spec/10-cli.md）
   const conversation = await chooseConversation(ctx, opts, {
     kind: 'agent',
@@ -148,7 +152,7 @@ export async function runCommand(promptArgs: string[], opts: RunOptions): Promis
     // 文脈の管理（docs/spec/16-context.md）。文脈長はモデルごとの判定結果から
     context: {
       settings: ctx.config.context,
-      windowTokens: endpoint.capabilities.byModel?.[model]?.contextTokens ?? null,
+      windowTokens,
       endpointId: endpoint.id,
     },
     ...(conversation.source?.latestCompaction()
@@ -215,6 +219,8 @@ export async function runCommand(promptArgs: string[], opts: RunOptions): Promis
             if (ev.instructionFiles.length > 0)
               out(c.dim(`指示ファイル: ${ev.instructionFiles.join(', ')}`));
             out(c.dim(describeConversation(conversation)));
+            if (ev.toolNames.length > 0)
+              out(c.dim(describeContext(ctx.config.context, windowTokens)));
             out('');
           }
           break;
@@ -393,6 +399,25 @@ function describeToolsMode(m: ToolsMode): string {
   if (m === 'native') return '関数呼び出し';
   if (m === 'prompted') return '本文ブロック（代替方式）';
   return '両対応';
+}
+
+/**
+ * どの閾値で圧縮するかを、どの設定から来ているかと一緒に出す。
+ * 文脈長が分かると compactAtTokens は使われない。見えないと、試すときに迷う（実際に迷った）。
+ */
+function describeContext(
+  settings: { mode: string; compactAtRatio: number; compactAtTokens: number },
+  windowTokens: number | null,
+): string {
+  if (settings.mode === 'off') return '文脈: 圧縮しない（context.mode が off）';
+  if (windowTokens === null) {
+    return `文脈: 長さ不明 / 約${settings.compactAtTokens.toLocaleString()}トークンを超えたら圧縮（context.compactAtTokens）`;
+  }
+  const hi = compactThreshold(settings, windowTokens, false);
+  const lo = compactThreshold(settings, windowTokens, true);
+  const range =
+    hi === lo ? `約${hi.toLocaleString()}` : `約${lo.toLocaleString()}〜${hi.toLocaleString()}`;
+  return `文脈: 長さ ${windowTokens.toLocaleString()} / ${range}トークンを超えたら圧縮（context.compactAtRatio ${settings.compactAtRatio}。サーバがトークン数を報告しなければ低いほう）`;
 }
 
 function describeConversation(conv: Awaited<ReturnType<typeof chooseConversation>>): string {

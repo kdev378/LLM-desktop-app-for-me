@@ -688,3 +688,38 @@ test('思考だけで上限に達したときは「応答が空」ではなく�
   assert.match(joined, /考えている途中で上限/);
   assert.doesNotMatch(joined, /応答が空/);
 });
+
+test('道具を含むリクエストに 404（道具に対応した提供元が無い）が返ったら、拒否として本文ブロック方式に切り替える', async () => {
+  // OpenRouter で、道具に対応しないモデル（Nex-N2.5-Mini）にこう返された。
+  // 以前は「モデルが見つかりません」と出て「判定できていません」になり、run が動かなかった
+  const { classifyHttp, probeEndpoint } = await import('../dist/index.js');
+  const body = JSON.stringify({
+    error: { message: 'No endpoints found that support tool use.', code: 404 },
+  });
+  const e = classifyHttp(404, body, { endpointId: 'ep' });
+  assert.equal(e.kind, 'bad_request');
+  assert.match(e.message, /道具の呼び出しを受け付けませんでした/);
+  assert.match(e.message, /--tools-mode prompted/, '動かし方を言う');
+
+  const provider = {
+    endpointId: 'ep',
+    async listModels() {
+      return [{ id: 'no-tools' }];
+    },
+    async probe() {
+      throw new Error('使わない');
+    },
+    async *chat() {
+      yield { type: 'start' };
+      yield { type: 'error', error: { ...e, bodyExcerpt: body } };
+    },
+  } as never;
+  const r = await probeEndpoint(provider, 'ep');
+  assert.equal(r.tools, 'prompted');
+
+  // 道具と関係ない 404 は、これまでどおり「モデルが見つからない」
+  assert.equal(
+    classifyHttp(404, '{"error":"model not found"}', { endpointId: 'ep' }).kind,
+    'model_not_found',
+  );
+});

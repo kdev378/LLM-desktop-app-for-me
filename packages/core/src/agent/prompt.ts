@@ -95,7 +95,7 @@ export function buildSystemPrompt(ctx: PromptContext): string {
     const recall = ctx.tools.some((t) => t.name === 'recall_search');
     parts.push(`## これまでの経過（圧縮版）
 会話が長くなったため、古いやり取りを次のようにまとめています。角括弧の中は根拠になったメッセージの ID です。
-${recall ? '圧縮された部分の詳細が必要なら recall_search で探し、recall_read で原文を読んでください。\n' : ''}ここに無いことを「無かったこと」と決めつけないでください。
+${recall ? '圧縮された部分の詳細が必要なら recall_search で探し、recall_read で原文を読んでください。\n以前のやり取りについて聞かれて、ここに答えが無いときは、「分からない」「確認できない」と答える前に、必ず recall_search で探してください。\n' : ''}ここに無いことを「無かったこと」と決めつけないでください。
 
 ${ctx.digest}`);
   }

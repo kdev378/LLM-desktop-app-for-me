@@ -138,11 +138,27 @@ test('圧縮版は厳格に読む。空の分類の省略だけは許す', () =>
 
   assert.equal(parseDigest('{"decisions":[]}', known).ok, false, 'フェンスが無ければ読まない');
   assert.equal(parseDigest('```akari-digest\n{decisions:[]}\n```', known).ok, false);
+  assert.equal(parseDigest(fence({ decisions: [42] }), known).ok, false, '形が違えば推測しない');
   assert.equal(
-    parseDigest(fence({ decisions: ['文字列だけ'] }), known).ok,
+    parseDigest(fence({ decisions: [{ sources: ['A'] }] }), known).ok,
     false,
-    '形が違えば推測しない',
+    '本文の無い項目は受け付けない',
   );
+});
+
+test('項目が文字列だけなら、根拠の無い項目として受け付ける（小さいモデルがこう書く）', () => {
+  // Granite 8B が "next": ["残りを読む"] のように書き、全部を捨てて機械的な要約へ落ちていた
+  const r = parseDigest(
+    fence({ decisions: [{ text: '決めた', sources: ['A'] }], next: ['残りを読む'] }),
+    new Set(['A']),
+  );
+  assert.ok(r.ok);
+  assert.deepEqual(
+    r.ok && r.digest.next,
+    [{ text: '残りを読む', sources: [] }],
+    '根拠は空として残す',
+  );
+  assert.equal(r.ok && r.bareItems, 1);
 });
 
 test('知らない ID を根拠にした項目は、残したうえで根拠を空にする', () => {

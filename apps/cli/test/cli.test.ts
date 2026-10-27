@@ -841,6 +841,11 @@ test('長い作業で圧縮が起き、digest で5分類が、recall で圧縮�
           '3つ読んで',
         ]);
         assert.equal(r.code, 0, r.stderr);
+        assert.match(
+          r.stdout,
+          /約6,000トークンを超えたら圧縮（context\.compactAtTokens）/,
+          'どの閾値かが見える',
+        );
         assert.match(r.stdout, /圧縮しています/);
         assert.match(r.stdout, /圧縮しました/);
 

@@ -24,6 +24,18 @@ export function classifyHttp(
       message: 'APIキーが拒否されました。設定の鍵を確認してください。',
     };
   }
+  // 道具を含むリクエストへの 404（OpenRouter は、道具に対応した提供元が無いモデルにこう返す）。
+  // 「モデルが無い」ではなく「道具を受け付けない」なので、そう分類する。
+  // 判定（probe）はこれを見て本文ブロック方式（prompted）に切り替える
+  if (status === 404 && /tool/i.test(body)) {
+    return {
+      ...base,
+      kind: 'bad_request',
+      message:
+        'この接続先（モデル）は道具の呼び出しを受け付けませんでした（404）。' +
+        '--tools-mode prompted なら、道具の定義を送らずに本文のブロックで動きます。',
+    };
+  }
   if (status === 404) {
     const m = ctx.model ? `モデル "${ctx.model}" ` : '';
     return {

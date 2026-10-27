@@ -561,11 +561,22 @@ akari recall --read 01M5XX2F07ZS…         # 原文を読む
 分からなければ12,000トークン。文脈長は `akari models` の「文脈長」の列、または
 `akari config endpoints probe -m <モデル> --context <数>` で入れた値を使う。
 
-試すときに早めに圧縮させるには:
+実行の最初に、どの閾値で圧縮するかが出る:
+
+```
+文脈: 長さ 32,768 / 約19,660〜22,937トークンを超えたら圧縮（context.compactAtRatio 0.7。サーバがトークン数を報告しなければ低いほう）
+```
+
+試すときに早めに圧縮させるには、**文脈長が分かっているかどうかで、効く設定が違う**:
 
 ```sh
-akari config set context.compactAtTokens 3000   # 文脈長が分からないモデルでの目安
-akari config set context.keepRecentTurns 1      # 生のまま残す直近の手数
+# 文脈長が分かっている（上の行に「長さ 32,768」のように出る）→ compactAtTokens は効かない
+akari config endpoints probe -m <モデル> --context 8000   # 文脈長を小さく入れ直す（試し終わったら戻す）
+akari config set context.compactAtRatio 0.3              # または割合を下げる
+# 文脈長が分からない（「長さ不明」）
+akari config set context.compactAtTokens 3000
+# どちらでも
+akari config set context.keepRecentTurns 1               # 生のまま残す直近の手数
 ```
 
 ---

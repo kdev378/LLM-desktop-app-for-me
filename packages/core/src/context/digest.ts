@@ -58,7 +58,14 @@ export function emptyDigest(): Digest {
 }
 
 export type ParseResult =
-  | { ok: true; digest: Digest; unknownSources: number }
+  | {
+      ok: true;
+      digest: Digest;
+      /** 存在しない ID を根拠に挙げていた項目の数（根拠は空にした）。 */
+      unknownSources: number;
+      /** 根拠の無い文字列だけで書かれていた項目の数。 */
+      bareItems: number;
+    }
   | { ok: false; error: string };
 
 const FENCE = /```akari-digest[ \t]*\r?\n([\s\S]*?)```/;
@@ -67,6 +74,9 @@ const FENCE = /```akari-digest[ \t]*\r?\n([\s\S]*?)```/;
  * モデルの出力から Digest を取り出す。厳格に読む。推測で補正しない。
  * - akari-digest のフェンスが無い、JSON として読めない、項目の形が違う → 失敗
  * - 中身が空の分類を省いたのは失敗にしない（空の一覧として扱う）
+ * - 項目が文字列だけ（"残りを読む"）なら、根拠の無い項目として受け付ける。
+ *   中身は推測なしに読めるし、根拠は空なので参照できるようには見えない。
+ *   小さいモデル（Granite 8B）がこう書いて、全部を捨てていた（2026-10-27）
  * - sources に知らない ID があれば、その項目は残して sources を空にする
  *   （参照できないものを、参照できるように見せない）
  */
@@ -85,11 +95,18 @@ export function parseDigest(text: string, knownIds: ReadonlySet<string>): ParseR
   const obj = raw as Record<string, unknown>;
   const digest = emptyDigest();
   let unknownSources = 0;
+  let bareItems = 0;
   for (const key of DIGEST_KEYS) {
     const list = obj[key];
     if (list === undefined) continue;
     if (!Array.isArray(list)) return { ok: false, error: `${key} が配列ではありません。` };
     for (const [i, item] of list.entries()) {
+      if (typeof item === 'string') {
+        if (item.trim() === '') return { ok: false, error: `${key}[${i}] が空です。` };
+        bareItems += 1;
+        digest[key].push({ text: item.trim(), sources: [] });
+        continue;
+      }
       if (typeof item !== 'object' || item === null) {
         return { ok: false, error: `${key}[${i}] が {"text", "sources"} の形ではありません。` };
       }
@@ -105,7 +122,7 @@ export function parseDigest(text: string, knownIds: ReadonlySet<string>): ParseR
       digest[key].push({ text: it.text.trim(), sources: valid ? sources : [] });
     }
   }
-  return { ok: true, digest, unknownSources };
+  return { ok: true, digest, unknownSources, bareItems };
 }
 
 /** システムプロンプトと画面に出す形。根拠の ID も出す（recall_read で原文を引けるように）。 */
