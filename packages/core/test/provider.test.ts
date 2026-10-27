@@ -322,3 +322,52 @@ test('送っていないパラメータを名指しされても、無限に送�
   assert.ok(s.requests.length <= 4, `送り直しすぎ: ${s.requests.length}回`);
   await s.close();
 });
+
+// ---------------- モデル一覧の時間切れ ----------------
+
+/**
+ * 中断されるまで返らない fetch。中断されたら本物と同じ AbortError を投げる。
+ * 本物の通信中はソケットがプロセスを生かしているが、ここには無いので、
+ * 待っている間だけイベントループを保つ（タイマーは unref されている）。
+ */
+function hangingFetch(): typeof fetch {
+  return ((_url: unknown, init?: { signal?: AbortSignal }) =>
+    new Promise((_resolve, reject) => {
+      const keep = setInterval(() => {}, 1000);
+      init?.signal?.addEventListener('abort', () => {
+        clearInterval(keep);
+        reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+      });
+    })) as unknown as typeof fetch;
+}
+
+test('モデル一覧の時間切れを「中断しました」と報告しない', async () => {
+  // 実際に OpenRouter（464件）で、初回の一覧取得が時間切れなのに
+  // 「中断しました」と出て、利用者が止めたように見えた
+  const p = createProvider(endpoint('http://127.0.0.1:1/v1'), {
+    fetchImpl: hangingFetch(),
+    listTimeoutMs: 100,
+  });
+  const err = await p.listModels().then(
+    () => null,
+    (e: unknown) => getProviderError(e),
+  );
+  assert.ok(err);
+  assert.equal(err.kind, 'unreachable', '時間切れは「繋がらない」の側（終了コード4）');
+  assert.match(err.message, /モデル一覧が .* 秒以内に返りませんでした/);
+  assert.doesNotMatch(err.message, /中断/);
+});
+
+test('利用者が止めたときは、モデル一覧でも「中断」と報告する', async () => {
+  const p = createProvider(endpoint('http://127.0.0.1:1/v1'), {
+    fetchImpl: hangingFetch(),
+    listTimeoutMs: 10_000,
+  });
+  const ac = new AbortController();
+  setTimeout(() => ac.abort(), 50);
+  const err = await p.listModels(ac.signal).then(
+    () => null,
+    (e: unknown) => getProviderError(e),
+  );
+  assert.equal(err?.kind, 'aborted');
+});

@@ -22,16 +22,16 @@ import type { ResolvedEndpoint } from '../config/endpoints.js';
 import type { Logger } from '../diagnostics/logger.js';
 
 /**
- * モデル一覧のような、待たされる理由の無いリクエストの上限。
- * 生成リクエストにはこれを使わない。ローカルのサーバは、
- * モデルを読み込み終わるまで応答ヘッダすら返さないことがあり、
- * その待ち時間は「繋がらない」ではなく「読み込み中」だから。
+ * モデル一覧の取得の上限（本文の受信まで含む）。
+ * 生成の持ち時間（endpoint.timeoutMs）とは別にする。ローカルのサーバは
+ * モデルの読み込み中に生成の応答を返さないことがあるが、一覧はその影響を受けない。
+ * 10秒だと、OpenRouter のように数百件を返す接続先で初回に足りなかった。
  */
-const QUICK_TIMEOUT_MS = 10_000;
+const LIST_TIMEOUT_MS = 30_000;
 /** トークン間の上限。これを超えたら壊れているとみなす。 */
 const IDLE_TIMEOUT_MS = 120_000;
 
-type AbortReason = { akari: 'connect-timeout' | 'first-token-timeout' | 'idle-timeout' };
+type AbortReason = { akari: 'list-timeout' | 'first-token-timeout' | 'idle-timeout' };
 
 /**
  * サーバによっては 400 で拒否する任意パラメータ。拒否されたら1つずつ落として送り直す。
@@ -53,6 +53,8 @@ export type ProviderOptions = {
   logger?: Logger;
   /** テスト用の差し替え。既定はグローバル fetch。 */
   fetchImpl?: typeof fetch;
+  /** モデル一覧の取得の上限。既定は30秒。テストで短くするための口。 */
+  listTimeoutMs?: number;
 };
 
 export function createProvider(endpoint: ResolvedEndpoint, opts: ProviderOptions = {}): Provider {
@@ -64,8 +66,10 @@ class OpenAiCompatibleProvider implements Provider {
   private readonly ep: ResolvedEndpoint;
   private readonly log?: Logger;
   private readonly doFetch: typeof fetch;
+  private readonly listTimeoutMs: number;
 
   constructor(endpoint: ResolvedEndpoint, opts: ProviderOptions) {
+    this.listTimeoutMs = opts.listTimeoutMs ?? LIST_TIMEOUT_MS;
     this.ep = endpoint;
     this.endpointId = endpoint.id;
     this.log = opts.logger;
@@ -89,20 +93,23 @@ class OpenAiCompatibleProvider implements Provider {
 
   async listModels(signal?: AbortSignal): Promise<ModelInfo[]> {
     const url = this.url('/models');
+    // 本文の受信まで同じ持ち時間で見る。時間切れは「中断」ではなく時間切れとして報告する
+    // （利用者が止めたのと区別しないと、何が起きたか分からない）。
+    const timer = withTimeout(signal, this.listTimeoutMs, { akari: 'list-timeout' });
     let res: Response;
+    let body: string;
     try {
       res = await this.doFetch(url, {
         method: 'GET',
         headers: this.headers(),
-        // 一覧は待たされる理由が無い。生成の持ち時間を当てない。
-        signal: withTimeout(signal, QUICK_TIMEOUT_MS, { akari: 'connect-timeout' }).signal,
+        signal: timer.signal,
       });
+      body = await res.text();
     } catch (err) {
-      throw toError(
-        classifyNetwork(err, { endpointId: this.endpointId, baseUrl: this.ep.baseUrl }),
-      );
+      throw toError(this.classifyAbort(err, timer.reason));
+    } finally {
+      timer.clear();
     }
-    const body = await res.text();
     if (!res.ok) {
       throw toError(
         classifyHttp(res.status, body, {
@@ -496,10 +503,13 @@ class OpenAiCompatibleProvider implements Provider {
     };
   }
 
-  private classifyAbort(err: unknown, reason: AbortReason | null, model: string): ProviderError {
+  private classifyAbort(err: unknown, reason: AbortReason | null, model?: string): ProviderError {
     if ((err as { name?: string })?.name === 'AbortError' && reason) {
       const map: Record<AbortReason['akari'], string> = {
-        'connect-timeout': `サーバが ${QUICK_TIMEOUT_MS / 1000} 秒以内に応答しませんでした。`,
+        'list-timeout':
+          `モデル一覧が ${Math.round(this.listTimeoutMs / 1000)} 秒以内に返りませんでした。` +
+          '一覧が大きい接続先では、初回に時間がかかることがあります。もう一度試してください。\n' +
+          'chat / run では -m でモデルを指定すると、一覧を取りに行かずに済みます。',
         'first-token-timeout':
           `最初の応答が ${Math.round(this.ep.timeoutMs / 1000)} 秒以内に来ませんでした。` +
           'モデルの読み込みや、長い入力の処理に時間がかかっている可能性があります。\n' +

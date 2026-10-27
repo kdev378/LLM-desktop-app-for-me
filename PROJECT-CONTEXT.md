@@ -127,7 +127,7 @@
   - `@akari/cli`: `config endpoints add/list/rm/use/probe`、`config list/get/set`、
     `models`、`chat`、`doctor`、`run`、`diff`、`undo`、`runs`
   - `tools/mock-llm-server.mjs`: 開発用の模擬OpenAI互換サーバ
-- 検証済み: 自動テスト187件（core 153 / CLI 34）。模擬サーバに対する通し動作。
+- 検証済み: 自動テスト191件（core 157 / CLI 34）。模擬サーバに対する通し動作。
   特にパス境界18件、ツール18件、実行ループと取り消し21件、代替方式と両対応20件を重点的に。
 - 実機確認用: `bash tools/verify-local-llm.sh <ベースURL> [モデル...]` で複数モデルを
   比較し、貼れる報告が1ファイルに出る

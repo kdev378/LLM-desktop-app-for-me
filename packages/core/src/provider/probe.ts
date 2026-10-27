@@ -8,6 +8,13 @@ import type {
 } from './types.js';
 
 /**
+ * 判定で許す応答の長さ。64 だと、考えてから答えるモデルが思考だけで使い切り、
+ * 道具を呼ぶ前に終わっていた（OpenRouter の cohere/north-mini-code で実際に起きた）。
+ * 判定はモデルごとに1回だけで結果を覚えるので、長めにしても毎回の負担にはならない。
+ */
+const PROBE_MAX_TOKENS = 512;
+
+/**
  * 接続先の実力を調べる。仕様: docs/spec/02-provider.md
  *
  * 判定は「その時点のモデルに対する結果」であることを notes に必ず書く。
@@ -108,6 +115,10 @@ export async function probeEndpoint(
   // 2. ツール呼び出しを1つだけ渡して、呼ばれるかを見る
   let sawToolCall = false;
   let sawText = false;
+  // 考えてから答えるモデルは、思考だけで上限を使い切ることがある。
+  // 数えておかないと「応答が空」と区別できない。
+  let reasoningLength = 0;
+  let finishReason: string | undefined;
   let usageReported = false;
   let usage: { prompt: number; completion: number; total: number } | undefined;
   let textLength = 0;
@@ -126,7 +137,7 @@ export async function probeEndpoint(
           { role: 'user', content: 'akari_probe_number を呼んで、その結果を教えてください。' },
         ],
         tools: [PROBE_TOOL],
-        maxTokens: 64,
+        maxTokens: PROBE_MAX_TOKENS,
         temperature: 0,
       },
       signal,
@@ -135,9 +146,14 @@ export async function probeEndpoint(
       else if (ev.type === 'text-delta') {
         sawText = true;
         textLength += ev.text.length;
-      } else if (ev.type === 'finish' && ev.usage) {
-        usageReported = true;
-        usage = ev.usage;
+      } else if (ev.type === 'reasoning-delta') {
+        reasoningLength += ev.text.length;
+      } else if (ev.type === 'finish') {
+        finishReason = ev.reason;
+        if (ev.usage) {
+          usageReported = true;
+          usage = ev.usage;
+        }
       } else if (ev.type === 'error') {
         error = ev.error;
         if (ev.error.kind === 'bad_request' && /tool|function/i.test(ev.error.bodyExcerpt ?? '')) {
@@ -173,6 +189,13 @@ export async function probeEndpoint(
       '  → 多くの場合、そのモデルの配布物にツール呼び出し用のテンプレートが入っていません。' +
         '同じモデルでも配布元によって変わります。代替方式でも動きますが、失敗しやすくなります。',
     );
+  } else if (reasoningLength > 0) {
+    tools = 'none';
+    notes.push(
+      `ツール判定: モデルが考えている途中で${finishReason === 'length' ? `上限（${PROBE_MAX_TOKENS}トークン）に達し、` : ''}` +
+        `ツールも本文も出しませんでした（思考 ${reasoningLength}文字）。判定できていません。`,
+    );
+    notes.push('  → 実行時は両対応（関数呼び出しと本文ブロックの両方）で試します。');
   } else {
     tools = 'none';
     notes.push('ツール判定: 応答が空でした。判定できていません。');

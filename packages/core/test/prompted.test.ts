@@ -642,3 +642,49 @@ test('両対応で関数呼び出しが来たら、本文のブロックは見�
     'すでに関数呼び出しが来ているなら本文は読まない',
   );
 });
+
+// ---------------- 考えてから答えるモデルの判定 ----------------
+
+/**
+ * 思考に「budget」トークン使ってから道具を呼ぶモデル。
+ * 応答の上限が思考の量より小さいと、思考の途中で打ち切られる。
+ */
+function thinkingProvider(budget: number) {
+  return {
+    endpointId: 'ep',
+    async listModels() {
+      return [{ id: 'thinker' }];
+    },
+    async probe() {
+      throw new Error('使わない');
+    },
+    async *chat(req: ChatRequest): AsyncGenerator<ChatEvent, void, void> {
+      yield { type: 'start', model: req.model };
+      const limit = req.maxTokens ?? Infinity;
+      yield { type: 'reasoning-delta', text: 'う'.repeat(Math.min(budget, limit)) };
+      if (limit <= budget) {
+        yield { type: 'finish', reason: 'length' };
+        return;
+      }
+      yield { type: 'tool-call', id: 'c1', name: 'akari_probe_number', argumentsRaw: '{}' };
+      yield { type: 'finish', reason: 'tool_calls' };
+    },
+  } as never;
+}
+
+test('考えてから道具を呼ぶモデルを、思考の途中で打ち切って「判定できず」にしない', async () => {
+  // 実際に OpenRouter の cohere/north-mini-code で、判定が「応答が空」になったのに
+  // 実行では普通に道具を呼べていた
+  const { probeEndpoint } = await import('../dist/index.js');
+  const r = await probeEndpoint(thinkingProvider(300), 'ep');
+  assert.equal(r.tools, 'native');
+});
+
+test('思考だけで上限に達したときは「応答が空」ではなく、そう伝える', async () => {
+  const { probeEndpoint } = await import('../dist/index.js');
+  const r = await probeEndpoint(thinkingProvider(100_000), 'ep');
+  assert.equal(r.tools, 'none', '判定できなかったことは変わらない');
+  const joined = r.notes.join('\n');
+  assert.match(joined, /考えている途中で上限/);
+  assert.doesNotMatch(joined, /応答が空/);
+});
