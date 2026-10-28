@@ -257,8 +257,15 @@ test('同じ呼び出しが3回続くとループとみなして停止する', a
     permissionMode: 'full',
     maxSteps: 10,
   });
-  const { end } = await run(session, '読んで');
+  const { end, events } = await run(session, '読んで');
   assert.equal(end.reason, 'loop');
+  // 3回目は実行しないので画面に出ない。止めた呼び出しの中身は知らせに出す
+  assert.equal(events.filter((e) => e.type === 'tool-start').length, 2);
+  const notice = events.find((e) => e.type === 'notice' && /回続いた/.test(e.message));
+  assert.match(
+    notice && notice.type === 'notice' ? notice.message : '',
+    /3 回目は実行せずに停止しました: read_file \{"path":"a\.txt"\}/,
+  );
 });
 
 test('ステップ上限に達したら max-steps で終わる', async () => {

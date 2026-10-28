@@ -490,7 +490,10 @@ export class Session {
           yield {
             type: 'notice',
             level: 'warn',
-            message: `同じ呼び出しが ${LOOP_THRESHOLD} 回続いたため停止しました: ${call.name}`,
+            // 止めた呼び出しは画面に出ないので、ここで中身を見せる（出ないと回数が合わなく見える）
+            message:
+              `同じ呼び出しが ${LOOP_THRESHOLD} 回続いたため、${LOOP_THRESHOLD} 回目は実行せずに停止しました: ` +
+              `${call.name} ${call.argumentsRaw.length > 200 ? `${call.argumentsRaw.slice(0, 200)}…` : call.argumentsRaw}`,
           };
           endReason = 'loop';
           abortRequested = true;

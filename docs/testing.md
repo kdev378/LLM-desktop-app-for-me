@@ -773,14 +773,16 @@ akari config set context.keepRecentTurns 1
 cd /tmp/akari-sandbox
 for i in 1 2 3 4 5; do seq 1 300 | sed "s/^/$i: 行 /" > part$i.txt; done
 echo "合言葉はりんごパイ" >> part1.txt
-akari run --permission full "read_file で part1.txt を全行読んでから、最後の行を教えて" -m <モデルID>
+akari run --read-only "read_file で part1.txt を全行読んでから、最後の行を教えて" -m <モデルID>
 for i in 2 3 4 5; do
-  akari run -c --permission full "read_file で part$i.txt を全行読んでから、最後の行を教えて" -m <モデルID>
+  akari run -c --read-only "read_file で part$i.txt を全行読んでから、最後の行を教えて" -m <モデルID>
 done
 ```
 
-「read_file で全行」と書くのは、書かないと `tail -n 1` で最後の1行だけを取るモデルがあるため
-（gemma-4-e4b）。それだと文脈が増えず、圧縮が起きない。
+`--read-only` で読み取りの道具だけを渡すのは、コマンドを渡すと `tail -n 1` で最後の1行だけを取る
+モデルがあるため（gemma-4-e4b。同じ指示でも実行ごとに `read_file` と `tail` が入れ替わり、
+「read_file で」と書いても無視されることがあった）。それだと文脈が増えず、圧縮が起きない。
+読み取りの道具は承認が要らないので、`--permission` は付けなくてよい。
 
 小さいモデルでは時間がかかる。lfm3-1.7b は圧縮版を書けず、1回の実行に6〜13分かかった（2026-10-28）。
 
@@ -792,6 +794,8 @@ done
 **期待**:
 - 2本目以降のどこかで `⧉ 文脈が約…トークンになったため、古い N 手を圧縮しています…` と `⧉ 圧縮しました` が出る
 - 圧縮のあとも作業が続き、各実行がその回のファイルの最後の行を答える（同じファイルを読み直し続けたりしない）
+- 読み取りだけでも、`read_file` の offset で末尾だけを読むなど、全体を読まずに済ませるモデルはありうる。
+  圧縮が1度も出なければ試験にならないので、そのときはモデルを変えるか、`context.compactAtRatio` を下げる
 
 ```sh
 akari digest
@@ -803,7 +807,7 @@ akari digest
 
 ```sh
 akari recall "りんごパイ"                       # 圧縮済みの part1 の中身が見つかる
-akari run -c "part1.txt の合言葉は何だった？" -m <モデルID>
+akari run -c --read-only "part1.txt の合言葉は何だった？" -m <モデルID>
 ```
 
 **期待**: `recall` で「圧縮済み」の印付きで見つかる。続きでは、モデルが圧縮版か `recall_search` を使って
