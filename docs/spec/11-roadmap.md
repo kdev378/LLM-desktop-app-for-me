@@ -167,7 +167,7 @@ akari recall "何を棄却したか"                      # 生の記録から�
 - [x] macOS 標準のターミナルで、kitty 方式の有効化・解除の指示が余計な文字を出さない（同上）
 - [ ] 白背景・黒背景の両方で、差し色が読めるか
 
-## P3 — ハーネスAPI【実装済み。実モデルでの確認待ち】（2026-10-28）
+## P3 — ハーネスAPI【完了。実モデル（OpenRouter）で確認済み】（2026-10-28）
 
 外部のマルチエージェントツールから使えるようにする。`12-harness-api.md`。
 
@@ -200,7 +200,8 @@ curl -N -H "Authorization: Bearer $TOKEN" localhost:7801/v1/runs/$ID/events
 - [x] サーバを落としても、走っていた実行の変更記録が残る。再起動後も記録・要約・差分を API で取れ、
       落ちたときに走っていた実行は `interrupted` になる
 - [x] HTTP からの `full` は `server.allowFullPermission` のときだけ
-- [ ] 実モデル（LM Studio）で、承認待ちから完了まで（`testing.md` 11-8）
+- [x] 実モデルで、承認待ちから完了まで（`testing.md` 11-8 の全項目。2026-10-28、Muse、OpenRouter `cohere/north-mini-code:free`）
+- [ ] LM Studio（ローカル）で同じ手順
 
 ---
 
