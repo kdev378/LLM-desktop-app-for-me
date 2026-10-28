@@ -350,6 +350,13 @@ export async function runCommand(promptArgs: string[], opts: RunOptions): Promis
       silent: ctx.json,
     });
   }
+  // 作業は終わっていない。スクリプトから成功に見えないよう、ステップ上限と同じ「途中で止まった」扱い
+  if (endReason === 'loop') {
+    throw new ExitError(EXIT.maxSteps, '同じ操作を繰り返したため、途中で止めました。', {
+      hint: '指示を具体的にするか、別のモデルで試してください。',
+      silent: ctx.json,
+    });
+  }
   if (endReason === 'error' || endReason === 'context-full')
     throw new ExitError(EXIT.runtime, '実行が失敗しました。', { silent: true });
 }

@@ -605,6 +605,7 @@ AKARI_ENDPOINT=L akari doctor
 | 知らない項目 | `akari config get x.y` | 2 |
 | 承認できない | `akari run … < /dev/null` | 3 |
 | ステップ上限 | `akari run --max-steps 1 …` | 5 |
+| 同じ操作の繰り返しで停止 | （モデル次第。模擬サーバの台本で同じ呼び出しを3回） | 5 |
 | 中断 | `Ctrl+C` | 130 |
 | ヘルプ | `akari --help` | 0 |
 | バージョン | `akari --version` | 0 |

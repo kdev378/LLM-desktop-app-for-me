@@ -330,6 +330,16 @@ test('非対話で承認が要る操作は自動拒否され、終了コード3�
   );
 });
 
+test('同じ操作の繰り返しで止まったら終了コード5（成功に見せない）', async () => {
+  const dir = await sandbox({ 'a.txt': 'x\n' });
+  const same = { name: 'read_file', arguments: { path: 'a.txt' } };
+  await withScriptedServer(11899, [same, same, same, { text: '終わり' }], async (ep) => {
+    const r = await akari(['-e', ep, 'run', '-C', dir, '-p', '読んで']);
+    assert.equal(r.code, 5);
+    assert.match(r.stderr, /繰り返した/);
+  });
+});
+
 test('full なら書き換えが通り、diff と undo が効く', async () => {
   const dir = await sandbox({ 'a.txt': '元\n' });
   await withScriptedServer(
