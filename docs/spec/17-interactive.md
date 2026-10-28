@@ -78,7 +78,11 @@ akari --read-only / --no-tools / --think <量> / --tools-mode <方式> / --no-sa
 |---|---|
 | Enter | 送信 |
 | Shift+Enter | 改行。端末がキーを区別して送れる場合（kitty キーボード方式に対応した kitty・WezTerm・Ghostty など） |
-| Option+Enter / Ctrl+J | 改行。Shift+Enter を区別できない端末（macOS 標準のターミナルなど）でも使える代わり |
+| Ctrl+J / `\` + Enter | 改行。どの端末でも効く。`\` + Enter は、行末の `\` を改行に置き換える |
+| Option+Enter | 改行。macOS 標準のターミナルでは「Option キーをメタキーとして使用」を入れたときだけ |
+
+**macOS 標準のターミナルは Shift+Enter を Enter と同じに送るので、見分けられない**（2026-10-28、オーナーの環境で確認）。
+そのターミナル（`TERM_PROGRAM=Apple_Terminal`）では、起動時の案内で Shift+Enter を出さず、Ctrl+J と `\` + Enter を案内する。
 | ← → / Ctrl+A / Ctrl+E | カーソル移動 / 行頭 / 行末 |
 | ↑ ↓ | 入力の履歴（カーソルが先頭行・最終行にあるとき）。それ以外は行の移動 |
 | Esc | 生成・実行を止める。承認の表示中は「拒否」と同じ |

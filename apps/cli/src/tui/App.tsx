@@ -15,6 +15,7 @@ import type { PermissionMode } from '@akari/core';
 import type { Controller, Dialog, Item, Line, Snapshot } from './controller.js';
 import {
   InputHistory,
+  backslashNewline,
   backspace,
   del,
   down,
@@ -101,12 +102,17 @@ export function App({ controller }: { controller: Controller }) {
     }
     if (!acceptsText) return;
 
-    // 改行: Shift+Enter（区別できる端末）/ Option+Enter / Ctrl+J
+    // 改行: Shift+Enter（区別できる端末）/ Option+Enter / Ctrl+J / 「\」+ Enter
     if ((key.return && (key.shift || key.meta)) || input === '\n') {
       setEditor((e) => insert(e, '\n'));
       return;
     }
     if (key.return) {
+      const escaped = backslashNewline(editor);
+      if (escaped) {
+        setEditor(escaped);
+        return;
+      }
       const text = editor.text;
       if (text.trim() === '' && snap.inputHint === null) return;
       if (snap.inputHint === null) history.current.push(text);

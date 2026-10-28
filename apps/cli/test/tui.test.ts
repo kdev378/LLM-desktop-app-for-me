@@ -10,6 +10,7 @@ import { ConversationStore, Workspace } from '@akari/core';
 import type { ChatEvent, ChatRequest, Provider } from '@akari/core';
 import {
   InputHistory,
+  backslashNewline,
   backspace,
   down,
   emptyEditor,
@@ -20,6 +21,7 @@ import {
 } from '../dist/tui/editor.js';
 import { Controller } from '../dist/tui/controller.js';
 import { App } from '../dist/tui/App.js';
+import { newlineHint } from '../dist/tui/lines.js';
 import { createContext } from '../dist/context.js';
 import { chooseConversation } from '../dist/conversation.js';
 
@@ -57,6 +59,14 @@ test('入力欄: 貼り付けの CRLF は改行1つ。絵文字を半分だけ�
   assert.equal(insert(emptyEditor, 'a\r\nb\rc').text, 'a\nb\nc');
   const s = insert(emptyEditor, 'x😀');
   assert.equal(backspace(s).text, 'x');
+});
+
+test('入力欄: 「\\」+ Enter で改行。macOS 標準のターミナルでは Shift+Enter を案内しない', () => {
+  const s = insert(emptyEditor, '一行目\\');
+  assert.deepEqual(backslashNewline(s), { text: '一行目\n', cursor: 4 });
+  assert.equal(backslashNewline(insert(emptyEditor, '普通')), null, '直前が \\ でなければ送信');
+  assert.match(newlineHint({ TERM_PROGRAM: 'Apple_Terminal' }), /Shift\+Enter を区別できません/);
+  assert.match(newlineHint({ TERM_PROGRAM: 'ghostty' }), /^改行は Shift\+Enter/);
 });
 
 test('入力欄: 履歴は書きかけを残し、戻ってくると返す', () => {
@@ -412,7 +422,11 @@ test('画面: 打った文字が入力欄に出て、Enter で送られ、Shift+
     await tick();
     stdin.type('\u001b[13;2u');
     await tick();
-    stdin.type('二行目');
+    stdin.type('二行目\\');
+    await tick();
+    stdin.type('\r');
+    await tick();
+    stdin.type('三行目');
     await tick();
     assert.match(stdout.frames.at(-1)!, /一行目/);
     assert.match(stdout.frames.at(-1)!, /二行目/);
@@ -420,8 +434,8 @@ test('画面: 打った文字が入力欄に出て、Enter で送られ、Shift+
     await until(controller, () => provider.calls.length > 0 && !controller.isBusy);
     assert.equal(
       provider.calls[0]!.messages.at(-1)!.content,
-      '一行目\n二行目',
-      'Shift+Enter の改行ごと送る',
+      '一行目\n二行目\n三行目',
+      'Shift+Enter と「\\」+ Enter の改行ごと送る',
     );
     await tick();
     assert.match(stdout.frames.join(''), /返事です/);

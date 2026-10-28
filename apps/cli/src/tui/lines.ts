@@ -14,6 +14,16 @@ export type Line = Seg[];
 export const seg = (text: string, tone?: Tone): Seg => (tone ? { text, tone } : { text });
 export const line = (text: string, tone?: Tone): Line => [seg(text, tone)];
 
+/**
+ * 改行の仕方の案内。macOS 標準のターミナルは Shift+Enter を Enter と同じに送るので、
+ * 効かないキーを案内しない（2026-10-28、オーナーの環境で効かなかった）。
+ */
+export function newlineHint(env: NodeJS.ProcessEnv = process.env): string {
+  return env.TERM_PROGRAM === 'Apple_Terminal'
+    ? '改行は Ctrl+J か「\\」+ Enter（このターミナルは Shift+Enter を区別できません）'
+    : '改行は Shift+Enter。効かなければ Ctrl+J か「\\」+ Enter';
+}
+
 /** 末尾の空行を落とす（差分の文字列は改行で終わるので、そのまま割ると空行が出る）。 */
 export function trimEnd(lines: string[]): string[] {
   let n = lines.length;
@@ -57,7 +67,8 @@ export function digestLines(c: Compaction): Line[] {
 export function helpLines(): Line[] {
   const rows: Array<[string, string]> = [
     ['Enter', '送信'],
-    ['Shift+Enter / Ctrl+J', '改行（Shift+Enter が効かない端末では Ctrl+J）'],
+    ['Shift+Enter', '改行（区別できる端末だけ。macOS 標準のターミナルでは効かない）'],
+    ['Ctrl+J / \\ + Enter', '改行（どの端末でも効く）'],
     ['↑ ↓', '入力の履歴'],
     ['Esc', '生成・実行を止める。承認の表示中は拒否'],
     ['Ctrl+C', '止める／入力を消す／2回で終了'],

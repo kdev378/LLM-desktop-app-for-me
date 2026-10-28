@@ -33,7 +33,16 @@ import {
 } from '../describe.js';
 import { formatDuration } from '../term.js';
 import { collectDiffs } from '../commands/runs.js';
-import { diffLine, digestLines, helpLines, line, seg, trimEnd, type Line } from './lines.js';
+import {
+  diffLine,
+  digestLines,
+  helpLines,
+  line,
+  newlineHint,
+  seg,
+  trimEnd,
+  type Line,
+} from './lines.js';
 
 export type { Line, Seg } from './lines.js';
 
@@ -742,7 +751,7 @@ export class Controller {
         ),
       );
     }
-    lines.push(line('/help で操作一覧。Enter で送信、Shift+Enter（または Ctrl+J）で改行。', 'dim'));
+    lines.push(line(`/help で操作一覧。Enter で送信。${newlineHint()}`, 'dim'));
     return lines;
   }
 

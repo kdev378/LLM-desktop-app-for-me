@@ -100,8 +100,9 @@ akari --conversation <ID>
 | キー | 動き |
 |---|---|
 | Enter | 送信 |
-| Shift+Enter | 改行（kitty・WezTerm・Ghostty など、キーを区別して送れる端末） |
-| Ctrl+J / Option+Enter | 改行（Shift+Enter が効かない端末。macOS 標準のターミナルなど） |
+| Shift+Enter | 改行（kitty・WezTerm・Ghostty など、キーを区別して送れる端末。**macOS 標準のターミナルでは効かない**） |
+| Ctrl+J / `\` + Enter | 改行（どの端末でも効く。`\` + Enter は行末の `\` が改行に変わる） |
+| Option+Enter | 改行（macOS 標準のターミナルでは下の設定が要る） |
 | ← → / Ctrl+A / Ctrl+E | カーソル移動 / 行頭 / 行末 |
 | ↑ ↓ | 入力の履歴（カーソルが先頭行・最終行にあるとき） |
 | Ctrl+U | 行頭からカーソルまでを消す |

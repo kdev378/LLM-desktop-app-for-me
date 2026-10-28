@@ -40,6 +40,16 @@ export function right(s: EditorState): EditorState {
   return { ...s, cursor: nextBoundary(s.text, s.cursor) };
 }
 
+/**
+ * カーソルの直前が「\」なら、それを改行に置き換える（「\」+ Enter で改行）。
+ * Shift+Enter を区別できない端末（macOS 標準のターミナル）でも、手を Enter から離さずに改行するため。
+ * 直前が「\」でなければ null。
+ */
+export function backslashNewline(s: EditorState): EditorState | null {
+  if (s.cursor === 0 || s.text[s.cursor - 1] !== '\\') return null;
+  return { text: s.text.slice(0, s.cursor - 1) + '\n' + s.text.slice(s.cursor), cursor: s.cursor };
+}
+
 /** 今の行の先頭へ。 */
 export function lineStart(s: EditorState): EditorState {
   return { ...s, cursor: s.text.lastIndexOf('\n', s.cursor - 1) + 1 };
