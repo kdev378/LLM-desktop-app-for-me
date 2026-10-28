@@ -54,6 +54,15 @@ test('read_file は行番号付きで返す', async () => {
   assert.match(r.content, /3\| three/);
 });
 
+test('read_file は末尾の改行を空の行として数えない', async () => {
+  const c = await ctx({ 'a.txt': 'one\ntwo\nthree\n', 'b.txt': 'x\n\n' });
+  const r = await c.tool('read_file').run({ path: 'a.txt' }, c.make());
+  assert.match(r.summary, /3 行読んだ/);
+  assert.ok(!r.content.includes('4|'), '存在しない4行目を出さないこと');
+  const b = await c.tool('read_file').run({ path: 'b.txt' }, c.make());
+  assert.match(b.summary, /2 行読んだ/, '本当の空行は1行として残ること');
+});
+
 test('read_file は作業フォルダの外を拒否する', async () => {
   const c = await ctx();
   const r = await c.tool('read_file').run({ path: '../secret' }, c.make());
@@ -124,6 +133,50 @@ test('glob と grep が中身を見つける', async () => {
   const gr = await c.tool('grep').run({ pattern: 'found' }, c.make());
   assert.match(gr.content, /src\/a\.ts:1/);
   assert.ok(!gr.content.includes('node_modules'));
+});
+
+test('grep は path にファイルを渡すとそのファイルを探す', async () => {
+  const c = await ctx({ 'part1.txt': '1: 行 1\n合言葉はりんごパイ\n', 'other.txt': '合言葉\n' });
+  const r = await c.tool('grep').run({ pattern: '合言葉', path: 'part1.txt' }, c.make());
+  assert.equal(r.ok, true);
+  assert.match(r.content, /part1\.txt:2: 合言葉はりんごパイ/);
+  assert.ok(!r.content.includes('other.txt'), '指定外のファイルは探さないこと');
+});
+
+test('glob・grep・list_dir は、探した場所によらず作業フォルダからのパスを返す', async () => {
+  // src を探して a.ts と返すと、モデルがそのまま read_file に渡して「ありません」になる
+  const c = await ctx({ 'src/a.ts': 'const found = 1;\n', 'src/sub/b.ts': 'found\n' });
+  const g = await c.tool('glob').run({ pattern: '**/*.ts', path: 'src' }, c.make());
+  assert.deepEqual(g.content.split('\n').sort(), ['src/a.ts', 'src/sub/b.ts']);
+  const g2 = await c.tool('glob').run({ pattern: 'src/*.ts', path: 'src' }, c.make());
+  assert.equal(g2.content, 'src/a.ts', '作業フォルダからのパターンでも一致する');
+  const gr = await c.tool('grep').run({ pattern: 'found', path: 'src', glob: '*.ts' }, c.make());
+  assert.match(gr.content, /^src\/a\.ts:1: /m);
+  const ls = await c.tool('list_dir').run({ path: 'src' }, c.make());
+  assert.match(ls.content, /^src\/a\.ts {2}\(/m);
+  assert.match(ls.content, /^src\/sub\/$/m);
+  const back = await c.tool('read_file').run({ path: gr.content.split(':')[0] }, c.make());
+  assert.equal(back.ok, true, '返したパスでそのまま読める');
+});
+
+test('glob と list_dir にファイルを渡すと、0件や空と言わずに断る', async () => {
+  const c = await ctx({ 'part1.txt': 'x\n' });
+  const g = await c.tool('glob').run({ pattern: '*', path: 'part1.txt' }, c.make());
+  assert.equal(g.ok, false);
+  assert.match(g.summary, /ファイルです/);
+  const ls = await c.tool('list_dir').run({ path: 'part1.txt' }, c.make());
+  assert.equal(ls.ok, false);
+  assert.match(ls.summary, /read_file/);
+});
+
+test('null の引数は指定なしとして扱う（必須なら弾く）', async () => {
+  const c = await ctx({ 'a.txt': 'one\ntwo\n' });
+  const r = await c.tool('read_file').run({ path: 'a.txt', limit: null, offset: null }, c.make());
+  assert.equal(r.ok, true);
+  assert.match(r.summary, /2 行読んだ/);
+  const bad = await c.tool('read_file').run({ path: null }, c.make());
+  assert.equal(bad.ok, false);
+  assert.equal(bad.errorKind, 'invalid');
 });
 
 test('delete_file は記録を残して消す', async () => {

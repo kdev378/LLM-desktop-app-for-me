@@ -773,11 +773,16 @@ akari config set context.keepRecentTurns 1
 cd /tmp/akari-sandbox
 for i in 1 2 3 4 5; do seq 1 300 | sed "s/^/$i: 行 /" > part$i.txt; done
 echo "合言葉はりんごパイ" >> part1.txt
-akari run --permission full "part1.txt を読んで、最後の行を教えて" -m <モデルID>
+akari run --permission full "read_file で part1.txt を全行読んでから、最後の行を教えて" -m <モデルID>
 for i in 2 3 4 5; do
-  akari run -c --permission full "part$i.txt を読んで、最後の行を教えて" -m <モデルID>
+  akari run -c --permission full "read_file で part$i.txt を全行読んでから、最後の行を教えて" -m <モデルID>
 done
 ```
+
+「read_file で全行」と書くのは、書かないと `tail -n 1` で最後の1行だけを取るモデルがあるため
+（gemma-4-e4b）。それだと文脈が増えず、圧縮が起きない。
+
+小さいモデルでは時間がかかる。lfm3-1.7b は圧縮版を書けず、1回の実行に6〜13分かかった（2026-10-28）。
 
 1ファイルずつ別の実行で読ませるのは、圧縮できる「古い手」を作るため。1回で5ファイルを頼むと、
 モデルによっては1手でまとめて読み、それが「直近の手」なので圧縮できない。そのときは圧縮ではなく、

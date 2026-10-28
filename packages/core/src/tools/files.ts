@@ -8,6 +8,7 @@ import {
   looksBinary,
   truncateMiddle,
   DEFAULT_IGNORE_DIRS,
+  type WalkEntry,
 } from './walk.js';
 import {
   denied,
@@ -24,12 +25,35 @@ import {
  */
 
 function parse<S extends z.ZodTypeAny>(schema: S, args: unknown): z.output<S> | ToolResult {
-  const r = schema.safeParse(args);
+  const r = schema.safeParse(dropNulls(args));
   if (r.success) return r.data;
   const detail = r.error.issues
     .map((i) => `${i.path.join('.') || '(引数)'}: ${i.message}`)
     .join(' / ');
   return denied(`引数が正しくありません: ${detail}`, 'invalid');
+}
+
+/**
+ * 値が null の引数は「指定なし」として落とす。小さいモデルは省略の代わりに
+ * `"limit": null` と書き、それを弾くと無駄な1手になる（gemma-4-e4b、2026-10-28）。
+ * 必須の引数が null なら、落とした結果「ありません」として弾かれる。
+ */
+function dropNulls(args: unknown): unknown {
+  if (typeof args !== 'object' || args === null || Array.isArray(args)) return args;
+  return Object.fromEntries(Object.entries(args).filter(([, v]) => v !== null));
+}
+
+/**
+ * 探した場所の中の相対パスを、作業フォルダからの相対パスにする。
+ * モデルは結果のパスをそのまま read_file に渡すので、`src` を探して `a.ts` と返すと読めない。
+ */
+function fromRoot(base: string, relative: string): string {
+  return toPosix(base === '.' ? relative : path.join(base, relative));
+}
+
+/** glob の照合。探した場所からの相対でも、作業フォルダからの相対でも一致すればよい。 */
+function globHits(pattern: string, base: string, relative: string): boolean {
+  return matchGlob(pattern, relative) || matchGlob(pattern, fromRoot(base, relative));
 }
 
 /** 引数の path を境界検査の対象として取り出す。 */
@@ -40,6 +64,15 @@ function strPath(args: unknown, mode: 'read' | 'write'): PathUse[] {
 
 const isResult = (v: unknown): v is ToolResult =>
   typeof v === 'object' && v !== null && 'ok' in v && 'summary' in v;
+
+/**
+ * 行に分ける。末尾の改行は行の終わりであって、次の空行の始まりではない
+ * （`wc -l` と同じ数え方）。数えると、モデルが「最後の行は空」と読み違える。
+ */
+function splitLines(text: string): string[] {
+  if (text === '') return [];
+  return (text.endsWith('\n') ? text.slice(0, -1) : text).split('\n');
+}
 
 // ---------------- read_file ----------------
 
@@ -81,7 +114,7 @@ export const readFileTool: ToolSpec = {
       return denied(`${a.path} はバイナリのため読めません（${st.size} バイト）。`, 'binary');
     }
 
-    const all = buf.toString('utf8').split('\n');
+    const all = splitLines(buf.toString('utf8'));
     const start = (a.offset ?? 1) - 1;
     const limit = a.limit ?? ctx.limits.readMaxLines;
     const slice = all.slice(start, start + limit);
@@ -132,6 +165,10 @@ export const listDirTool: ToolSpec = {
     const r = await ctx.workspace.resolve(a.path, 'read');
     if (!r.ok) return denied(r.message);
     if (!r.exists) return denied(`ディレクトリがありません: ${a.path}`, 'not-found');
+    // walk はファイルを渡されると0件になり、「空のディレクトリ」と誤った事実を返してしまう
+    if (!(await fs.stat(r.absolute)).isDirectory()) {
+      return denied(`${a.path} はファイルです。中身は read_file で読んでください。`, 'invalid');
+    }
 
     const { entries, truncated } = await walk(r.absolute, {
       maxDepth: a.depth - 1,
@@ -143,7 +180,9 @@ export const listDirTool: ToolSpec = {
       return { ok: true, summary: `${r.relative} は空`, content: '(空のディレクトリ)' };
     }
     const lines = entries.map((e) =>
-      e.isDir ? `${toPosix(e.relative)}/` : `${toPosix(e.relative)}  (${e.size} B)`,
+      e.isDir
+        ? `${fromRoot(r.relative, e.relative)}/`
+        : `${fromRoot(r.relative, e.relative)}  (${e.size} B)`,
     );
     if (truncated)
       lines.push(`… 件数が多いため打ち切りました（除外: ${DEFAULT_IGNORE_DIRS.join(', ')}）`);
@@ -176,11 +215,17 @@ export const globTool: ToolSpec = {
     const r = await ctx.workspace.resolve(a.path, 'read');
     if (!r.ok) return denied(r.message);
     if (!r.exists) return denied(`ディレクトリがありません: ${a.path}`, 'not-found');
+    if (!(await fs.stat(r.absolute)).isDirectory()) {
+      return denied(
+        `${a.path} はファイルです。path には探し始めるディレクトリを指定してください。`,
+        'invalid',
+      );
+    }
 
     const { entries, truncated } = await walk(r.absolute, { signal: ctx.signal });
     const hits = entries
-      .filter((e) => matchGlob(a.pattern, e.relative))
-      .map((e) => toPosix(e.relative));
+      .filter((e) => globHits(a.pattern, r.relative, e.relative))
+      .map((e) => fromRoot(r.relative, e.relative));
     if (hits.length === 0) {
       return {
         ok: true,
@@ -236,10 +281,19 @@ export const grepTool: ToolSpec = {
 
     const r = await ctx.workspace.resolve(a.path, 'read');
     if (!r.ok) return denied(r.message);
-    if (!r.exists) return denied(`ディレクトリがありません: ${a.path}`, 'not-found');
+    if (!r.exists) return denied(`ファイルがありません: ${a.path}`, 'not-found');
 
-    const { entries } = await walk(r.absolute, { signal: ctx.signal });
-    const targets = a.glob ? entries.filter((e) => matchGlob(a.glob!, e.relative)) : entries;
+    // path がファイルなら、そのファイルだけを探す。walk はディレクトリしか辿らない
+    const st = await fs.stat(r.absolute);
+    let targets: WalkEntry[];
+    if (st.isDirectory()) {
+      const { entries } = await walk(r.absolute, { signal: ctx.signal });
+      targets = (
+        a.glob ? entries.filter((e) => globHits(a.glob!, r.relative, e.relative)) : entries
+      ).map((e) => ({ ...e, relative: fromRoot(r.relative, e.relative) }));
+    } else {
+      targets = [{ relative: r.relative, absolute: r.absolute, isDir: false, size: st.size }];
+    }
 
     const lines: string[] = [];
     let scanned = 0;
@@ -259,7 +313,7 @@ export const grepTool: ToolSpec = {
       const text = buf.toString('utf8');
       if (!re.test(text)) continue;
       matched += 1;
-      const fileLines = text.split('\n');
+      const fileLines = splitLines(text);
       for (let i = 0; i < fileLines.length && lines.length < a.maxMatches; i++) {
         const line = fileLines[i]!;
         if (re.test(line)) {
