@@ -359,6 +359,39 @@ test('求めても断られたら読めない。秘密でないファイルや�
   assert.ok(!results[3]!.includes('本物'));
 });
 
+test(
+  '閉じ込めが効いていれば、秘密のファイルを断っても、残りのコマンドは止めない',
+  { skip },
+  async () => {
+    // ヘッドレスで許可の求めが自動拒否されても、ふつうのコマンドまで全滅させない（05-agent.md の例外）
+    const s = await setup({ '.env': 'API_KEY=本物\n' });
+    const provider = fakeProvider([
+      { tool: 'read_file', args: { path: '.env' } },
+      { tool: 'request_secret_access', args: { path: '.env', reason: '読みたい' } },
+      cmd('echo ふつうのコマンド'),
+      { text: '終わり' },
+    ]);
+    const events = await withHome(s.home, () =>
+      run(
+        Session.create({
+          provider,
+          model: 'm',
+          workspace: s.workspace,
+          root: s.data,
+          permissionMode: 'full',
+          sandbox: settings(),
+        }),
+        '読んで',
+        () => 'deny',
+      ),
+    );
+    const asked = events.filter((e) => e.type === 'approval-request');
+    assert.equal(asked.length, 1, '聞いたのは秘密の許可だけ。ふつうのコマンドは自動で通る');
+    assert.match(toolResults(provider)[2]!, /ふつうのコマンド/);
+    assert.ok(!events.some((e) => e.type === 'notice' && /自動で実行しません/.test(e.message)));
+  },
+);
+
 test('秘密のファイルが無ければ、request_secret_access は渡さない', async () => {
   const s = await setup({ 'a.txt': 'x\n' });
   const provider = fakeProvider([{ text: 'はい' }]);

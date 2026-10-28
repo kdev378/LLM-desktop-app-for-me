@@ -170,7 +170,7 @@
   - `@akari/cli`: 対話画面（引数なしの `akari`、2026-10-28）、`config endpoints add/list/rm/use/probe`、`config list/get/set`、
     `models`、`chat`、`doctor`、`run`、`diff`、`undo`、`runs`、`conversations`、`digest`、`recall`
   - `tools/mock-llm-server.mjs`: 開発用の模擬OpenAI互換サーバ
-- 検証済み: 自動テスト307件（core 232 / server 17 / CLI 58）。模擬サーバに対する通し動作。
+- 検証済み: 自動テスト308件（core 233 / server 17 / CLI 58）。模擬サーバに対する通し動作。
   特にパス境界18件、ツール18件、実行ループと取り消し21件、代替方式と両対応20件を重点的に。
 - 実機確認用: `bash tools/verify-local-llm.sh <ベースURL> [モデル...]` で複数モデルを
   比較し、貼れる報告が1ファイルに出る
@@ -186,7 +186,7 @@
   `--think`（どちらの口が通るか）と読み込み状態の実際の値。対話モードの `Ctrl+C` は自動テストしていない。
 - 会話の保存（P1 の残り、2026-10-27）: `run` / `chat` の保存と続き、`akari conversations`。
   同時追記で行が混ざらないことは Linux でのみ確認
-- コマンドの閉じ込め（P3+、2026-10-28）: Linux（bubblewrap）で確認。**macOS（Seatbelt）は動かしていない**（`testing.md` 11-9）
+- コマンドの閉じ込め（P3+、2026-10-28）: Linux（bubblewrap）で確認（この環境と Muse の VM）。**macOS（Seatbelt）は動かしていない**（`testing.md` 11-9）
 - 未実装: MCP（P4）、記憶（P5）、Web（P6）、デスクトップ（P7以降）
 - 文脈の圧縮（P2、2026-10-27）: LM Studio で gemma-4-e4b が5分類の圧縮版を書け、`recall` と続きでの正答まで確認（2026-10-28、2回）。
   lfm3-1.7b は書けず、毎回機械的な要約になった（1回数分かかる）

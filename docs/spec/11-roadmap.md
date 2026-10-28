@@ -260,7 +260,8 @@ P3 で外部のエージェントが `full` のまま無人で走らせられる
 - [x] worktree の中の `git commit` が通る（元の `.git` には書ける）（同上）
 - [x] モデルが `.env` の読み取りを求め、利用者が許すとその実行の間だけ読める（オーナーの要望。どの権限でも毎回聞く）
 - [x] 閉じ込められない環境では、HTTP からの `full` を断る
-- [ ] **macOS（Seatbelt）で同じ確認**（`testing.md` 11-9。規則の組み立ては自動テストで確かめたが、動かしていない）
+- [x] 別の Linux（Muse の VM、bubblewrap 0.9.0）でも `pnpm test:sandbox` と手での確認が通った（2026-10-29）
+- [ ] **macOS（Seatbelt）で同じ確認**（`testing.md` 11-9。規則の組み立ては自動テストで確かめたが、動かしていない。オーナーが macOS の VM で試す予定）
 - [ ] Linux で、一般利用者の権限（root でない）で bubblewrap が動くか（この環境は root）
 
 ---

@@ -780,7 +780,9 @@ export class Session {
             ? '別の手段（コマンドなど）で読もうとしないでください。'
             : NO_WORKAROUND;
         yield* this.pushToolResult(call, false, `${check.message}\n${tail}`);
-        yield* this.markRefused();
+        // 秘密のファイルを断っただけで、閉じ込めが効いていれば、コマンドからも読めない。
+        // 迂回のしようがないので、残りのコマンドまでは止めない（ヘッドレスで全滅させない）
+        if (!(check.secret && this.sandboxStatus?.active)) yield* this.markRefused();
         return 'ok';
       }
     }
@@ -831,7 +833,10 @@ export class Session {
           summary: '拒否されました',
         };
         yield* this.pushToolResult(call, false, msg);
-        yield* this.markRefused();
+        // 秘密のファイルの許可を断った場合も同じ（閉じ込めが効いていれば、コマンドからは読めない）
+        if (!(tool.name === SECRET_ACCESS_TOOL_NAME && this.sandboxStatus?.active)) {
+          yield* this.markRefused();
+        }
         return 'ok';
       }
       if (decision.kind === 'allow-session') this.sessionAllows.add(decision.scope);
