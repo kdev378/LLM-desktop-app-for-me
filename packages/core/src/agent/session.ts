@@ -149,14 +149,42 @@ const NO_WORKAROUND =
 /** ツール呼び出しと、それがどう来たか。 */
 type PendingCall = ToolCallRequest & { origin: 'native' | 'prompted' };
 
+/**
+ * 送る合間に変えてよい設定（docs/spec/17-interactive.md「1回の送信と、記録」）。
+ * 記録は「何を呼び、何が返ったか」で持つので、途中で変えても続きは壊れない。
+ */
+export type SessionReconfig = {
+  model?: string;
+  permissionMode?: PermissionMode;
+  toolNames?: string[];
+  toolsMode?: ToolsMode;
+  /** null で既定（送らない）に戻す。 */
+  reasoning?: ReasoningLevel | null;
+  /** モデルを変えたときの、そのモデルの文脈長。 */
+  windowTokens?: number | null;
+};
+
+/** 文脈の量。最後に送ったリクエストのもの。 */
+export type ContextUsage = {
+  tokens: number;
+  /** 圧縮を始める量。 */
+  threshold: number;
+  windowTokens: number | null;
+  /** 実測で補正していない概算か。 */
+  estimated: boolean;
+};
+
 export class Session {
-  readonly runId: string;
+  private currentRunId: string;
+  /** 1度でも送ったか。2回目からは送るたびに新しい実行 ID を振る。 */
+  private sentOnce = false;
   readonly workspace: Workspace;
   private readonly opts: Required<Pick<SessionOptions, 'permissionMode' | 'maxSteps'>> &
     SessionOptions;
   private readonly limits: ToolLimits;
-  private readonly tools: ToolSpec[];
-  private readonly unknownTools: string[];
+  private tools: ToolSpec[];
+  private unknownTools: string[];
+  private lastUsage: ContextUsage | null = null;
   /**
    * 生の記録（正本）。モデルへ送るメッセージは、呼ぶたびにここから組み立てる。
    * その場で続けても、保存した会話から続けても、同じ組み立て方になるようにするため。
@@ -191,7 +219,7 @@ export class Session {
     unknown: string[],
     limits: ToolLimits,
   ) {
-    this.runId = opts.runId ?? ulid();
+    this.currentRunId = opts.runId ?? ulid();
     this.workspace = opts.workspace;
     this.opts = { permissionMode: 'ask', maxSteps: 25, ...opts };
     this.tools = tools;
@@ -212,6 +240,55 @@ export class Session {
 
   get isRunning(): boolean {
     return this.running;
+  }
+
+  /** いま（または直前）の実行の ID。送るたびに変わる。 */
+  get runId(): string {
+    return this.currentRunId;
+  }
+
+  get permissionMode(): PermissionMode {
+    return this.opts.permissionMode;
+  }
+
+  get model(): string {
+    return this.opts.model;
+  }
+
+  /** 渡す道具の名前（圧縮後にだけ渡す recall は含まない）。 */
+  get toolNames(): string[] {
+    return this.tools.map((t) => t.name);
+  }
+
+  /** 最後に送ったリクエストの文脈の量。まだ送っていなければ null。 */
+  get contextUsage(): ContextUsage | null {
+    return this.lastUsage;
+  }
+
+  /** 送る合間に設定を変える。実行中は変えない（その実行の判断が途中で変わるため）。 */
+  reconfigure(patch: SessionReconfig): void {
+    if (this.running) throw new Error('実行中は設定を変えられません。');
+    if (patch.model !== undefined && patch.model !== this.opts.model) {
+      this.opts.model = patch.model;
+      // 実測との比はモデルの数え方に依る。別のモデルへ持ち越さない
+      this.calibration = null;
+      this.lastUsage = null;
+    }
+    if (patch.permissionMode !== undefined) this.opts.permissionMode = patch.permissionMode;
+    if (patch.toolNames !== undefined) {
+      const { tools, unknown } = selectTools(patch.toolNames);
+      this.tools = tools;
+      this.unknownTools = unknown;
+      this.opts.toolNames = patch.toolNames;
+    }
+    if (patch.toolsMode !== undefined) this.opts.toolsMode = patch.toolsMode;
+    if (patch.reasoning !== undefined) {
+      if (patch.reasoning === null) delete this.opts.reasoning;
+      else this.opts.reasoning = patch.reasoning;
+    }
+    if (patch.windowTokens !== undefined && this.opts.context) {
+      this.opts.context = { ...this.opts.context, windowTokens: patch.windowTokens };
+    }
   }
 
   /** 承認の返答。approval-request を受け取った側が呼ぶ。 */
@@ -241,6 +318,9 @@ export class Session {
 
   async *send(input: string): AsyncGenerator<RunEvent, void, void> {
     if (this.running) throw new Error('この会話では既に実行中です。');
+    // 1回の送信を1つの実行にする。変更の記録と取り消しも1回ごと（17-interactive.md）
+    if (this.sentOnce) this.currentRunId = ulid();
+    this.sentOnce = true;
     this.running = true;
     this.aborted = false;
     this.controller = new AbortController();
@@ -324,6 +404,15 @@ export class Session {
 
       // 送る前に量を見る。超えそうなら古い手を圧縮する（16-context.md「いつ圧縮するか」）
       const prepared = yield* this.prepareRequest(promptBase);
+      if (prepared && this.opts.context) {
+        const ctx = this.opts.context;
+        this.lastUsage = {
+          tokens: prepared.tokens,
+          threshold: compactThreshold(ctx.settings, ctx.windowTokens, prepared.estimatedOnly),
+          windowTokens: ctx.windowTokens,
+          estimated: prepared.estimatedOnly,
+        };
+      }
       if (this.aborted) {
         endReason = 'aborted';
         break;

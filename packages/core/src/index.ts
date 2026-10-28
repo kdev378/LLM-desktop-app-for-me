@@ -134,7 +134,12 @@ export {
   type UndoResult,
   type JournalFile,
 } from './agent/journal.js';
-export { Session, type SessionOptions } from './agent/session.js';
+export {
+  Session,
+  type SessionOptions,
+  type SessionReconfig,
+  type ContextUsage,
+} from './agent/session.js';
 export type {
   ConversationRecorder,
   RecordedMessage,

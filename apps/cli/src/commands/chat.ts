@@ -2,11 +2,9 @@ import readline from 'node:readline';
 import {
   createProvider,
   getProviderError,
-  ulid,
   type ChatMessage,
   type ConversationRecorder,
   type Provider,
-  type ReasoningLevel,
 } from '@akari/core';
 import {
   createContext,
@@ -18,6 +16,7 @@ import {
 import { c, out, write, note, isInteractive, formatDuration } from '../term.js';
 import { ExitError, EXIT } from '../exit.js';
 import { chooseConversation, safeSaver, type ConversationChoice } from '../conversation.js';
+import { chatTurn, type ChatParams, type ChatRecord } from '../chat-turn.js';
 
 export type ChatOptions = GlobalOptions & {
   prompt?: string;
@@ -221,41 +220,21 @@ async function runTurn(
   provider: Provider,
   model: string,
   messages: ChatMessage[],
-  params: { temperature: number; maxTokens: number | null; reasoning?: ReasoningLevel },
+  params: ChatParams,
   json: boolean,
   quiet: boolean,
   isExternal: boolean,
   signal?: AbortSignal,
-  record?: {
-    recorder: ConversationRecorder;
-    save: (task: () => Promise<unknown>) => Promise<void>;
-  },
+  record?: ChatRecord,
 ): Promise<TurnResult> {
   const started = Date.now();
-  let text = '';
-  let reasoning = '';
-  // 1往復を1つの実行として記録する。終わり方を run と同じ形で残すため
-  const turnId = ulid();
-  const userText = messages.at(-1)?.content ?? '';
-  let lastInflightAt = Date.now();
-  const saveInflight = async () => {
-    if (!record || Date.now() - lastInflightAt < 1000) return;
-    lastInflightAt = Date.now();
-    await record.save(() => record.recorder.inflight(turnId, { text, reasoning, step: 1 }));
-  };
-  if (record) {
-    await record.save(() => record.recorder.runStarted(turnId));
-    await record.save(() =>
-      record.recorder.record(turnId, { id: ulid(), role: 'user', text: userText }),
-    );
-  }
-  let firstTokenAt: number | null = null;
+  let gotToken = false;
   let waiting: NodeJS.Timeout | null = null;
   const showWaiting = !json && !quiet && process.stdout.isTTY === true;
 
   if (showWaiting) {
     waiting = setInterval(() => {
-      if (firstTokenAt === null) {
+      if (!gotToken) {
         const secs = Math.round((Date.now() - started) / 1000);
         write(`\r${c.gray(`待機中 ${secs}秒`)}   `);
       }
@@ -272,86 +251,55 @@ async function runTurn(
   };
 
   try {
-    for await (const ev of provider.chat(
-      {
-        model,
-        messages,
-        temperature: params.temperature,
-        maxTokens: params.maxTokens,
-        ...(params.reasoning ? { reasoning: params.reasoning } : {}),
-      },
-      signal,
-    )) {
-      if (json) {
-        out(JSON.stringify({ ts: new Date().toISOString(), ...ev }));
+    for await (const ev of chatTurn(provider, model, messages, params, signal, record)) {
+      if (ev.type === 'provider') {
+        if (json) out(JSON.stringify({ ts: new Date().toISOString(), ...ev.event }));
+        continue;
       }
       switch (ev.type) {
         // 送ったものが通らなかったことを黙らない
         case 'notice':
           if (!json) process.stderr.write(c.yellow('  ! ') + ev.message + '\n');
           break;
-        case 'text-delta':
-          if (firstTokenAt === null) {
-            firstTokenAt = Date.now();
+        case 'text':
+          if (!gotToken) {
+            gotToken = true;
             stopWaiting();
           }
-          text += ev.text;
           if (!json) write(ev.text);
-          await saveInflight();
           break;
-        case 'reasoning-delta':
-          if (firstTokenAt === null) {
-            firstTokenAt = Date.now();
+        case 'reasoning':
+          if (!gotToken) {
+            gotToken = true;
             stopWaiting();
           }
-          reasoning += ev.text;
-          await saveInflight();
           break;
-        case 'finish': {
+        case 'done': {
           stopWaiting();
           if (!json) {
-            if (!text.endsWith('\n')) out('');
+            if (!ev.text.endsWith('\n')) out('');
             if (ev.reason === 'length') out(c.yellow('（上限に達して途中で止まりました）'));
             if (ev.reason === 'aborted') out(c.yellow('（停止しました）'));
             if (!quiet) {
-              const parts = [`${formatDuration(Date.now() - started)}`];
-              if (firstTokenAt)
-                parts.push(`最初の応答まで ${formatDuration(firstTokenAt - started)}`);
+              const parts = [`${formatDuration(ev.durationMs)}`];
+              if (ev.firstTokenMs !== null)
+                parts.push(`最初の応答まで ${formatDuration(ev.firstTokenMs)}`);
               if (ev.usage) parts.push(`${ev.usage.prompt}+${ev.usage.completion} トークン`);
               else
                 parts.push(
-                  `~${estimateTokens([{ role: 'assistant', content: text }])} トークン（概算）`,
+                  `~${estimateTokens([{ role: 'assistant', content: ev.text }])} トークン（概算）`,
                 );
-              if (reasoning) parts.push(`思考出力 ${reasoning.length}文字（非表示）`);
+              if (ev.reasoning) parts.push(`思考出力 ${ev.reasoning.length}文字（非表示）`);
               out(c.gray(parts.join('  ')));
             }
             out('');
           }
-          messages.push({ role: 'assistant', content: text });
-          if (record) {
-            await record.save(() =>
-              record.recorder.record(turnId, {
-                id: ulid(),
-                role: 'assistant',
-                text,
-                ...(reasoning ? { reasoning } : {}),
-                finishReason: ev.reason,
-                ...(ev.usage ? { usage: ev.usage } : {}),
-                durationMs: Date.now() - started,
-                step: 1,
-              }),
-            );
-            await record.save(() => record.recorder.inflight(turnId, null));
-            await record.save(() =>
-              record.recorder.runEnded(turnId, ev.reason === 'aborted' ? 'aborted' : 'done'),
-            );
-          }
-          return { text };
+          return { text: ev.text };
         }
         case 'error': {
           stopWaiting();
           if (!json) {
-            if (text !== '' && ev.error.kind !== 'aborted') {
+            if (ev.text !== '' && ev.error.kind !== 'aborted') {
               out('');
               out(c.yellow('（応答が途中で切れました。上までが受け取った内容です）'));
             }
@@ -367,33 +315,14 @@ async function runTurn(
             }
             out('');
           }
-          if (text !== '') messages.push({ role: 'assistant', content: text });
-          if (record) {
-            const aborted = ev.error.kind === 'aborted';
-            await record.save(() =>
-              record.recorder.record(turnId, {
-                id: ulid(),
-                role: 'assistant',
-                text,
-                ...(reasoning ? { reasoning } : {}),
-                ...(aborted ? { finishReason: 'aborted' as const } : { error: ev.error }),
-                durationMs: Date.now() - started,
-                step: 1,
-              }),
-            );
-            await record.save(() => record.recorder.inflight(turnId, null));
-            await record.save(() =>
-              record.recorder.runEnded(turnId, aborted ? 'aborted' : 'error'),
-            );
-          }
-          return { text, error: ev.error as never };
+          return { text: ev.text, error: ev.error as never };
         }
         default:
           break;
       }
     }
     stopWaiting();
-    return { text };
+    return { text: '' };
   } finally {
     stopWaiting();
   }

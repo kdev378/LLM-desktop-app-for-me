@@ -4,11 +4,6 @@ import {
   Workspace,
   Session,
   createProvider,
-  resolveToolsMode,
-  compactThreshold,
-  updateEndpoint,
-  ALL_TOOL_NAMES,
-  READ_ONLY_TOOL_NAMES,
   type ApprovalDecision,
   type RunEvent,
   type PermissionMode,
@@ -19,12 +14,27 @@ import {
   pickEndpoint,
   pickModel,
   pickReasoning,
-  persist,
   type GlobalOptions,
 } from '../context.js';
 import { c, out, write, note, isInteractive, formatDuration } from '../term.js';
 import { ExitError, EXIT } from '../exit.js';
 import { chooseConversation } from '../conversation.js';
+import {
+  decideToolsMode,
+  resolvePermission,
+  resolveToolsModeOption,
+  toolNamesFor,
+  toolScopeOf,
+  windowTokensFor,
+} from '../agent-setup.js';
+import {
+  createBlockFilter,
+  describeContext,
+  describeEnd,
+  describeMode,
+  describeToolsMode,
+  summarizeArgs,
+} from '../describe.js';
 
 /**
  * akari run — エージェント実行。仕様: docs/spec/10-cli.md
@@ -79,53 +89,14 @@ export async function runCommand(promptArgs: string[], opts: RunOptions): Promis
     (await provider.listModels()).map((m) => m.id),
   );
 
-  const toolNames = opts.noTools ? [] : opts.readOnly ? READ_ONLY_TOOL_NAMES : ALL_TOOL_NAMES;
-
-  // ツール呼び出しの方式を確定させてから実行する。
-  // 未判定のまま非対応モデルへネイティブのツール定義を渡すと、
-  // モデルが何も呼ばず「何も起きずに終わった」ように見えてしまう。
-  // 道具の渡し方。明示されていれば判定そのものを省く（無駄な呼び出しを1回減らす）。
+  const toolNames = toolNamesFor(toolScopeOf(opts));
   const forced = resolveToolsModeOption(opts, ctx.config.agent.toolsMode);
-  const toolsMode =
-    toolNames.length === 0 || forced !== null
-      ? { mode: (forced ?? 'both') as ToolsMode, probed: false, notes: [] as string[] }
-      : await resolveToolsMode(
-          provider,
-          {
-            tools: endpoint.capabilities.tools,
-            probedModel: endpoint.capabilities.probedModel,
-            byModel: endpoint.capabilities.byModel,
-          },
-          model,
-        );
+  const toolsMode = await decideToolsMode(ctx, endpoint, provider, model, toolNames, forced);
   if (!ctx.json && !ctx.quiet) {
     for (const n of toolsMode.notes) note(n);
   }
-  if ('capabilities' in toolsMode && toolsMode.capabilities) {
-    // 判定結果は保存する。毎回判定し直さないため。
-    await persist(
-      ctx,
-      updateEndpoint(ctx.config, endpoint.id, {
-        capabilities: {
-          ...endpoint.capabilities,
-          ...toolsMode.capabilities,
-          byModel: {
-            ...endpoint.capabilities.byModel,
-            ...('modelCapability' in toolsMode && toolsMode.modelCapability
-              ? { [toolsMode.modelCapability.model]: toolsMode.modelCapability.value }
-              : {}),
-          },
-        },
-      }),
-    ).catch((err: unknown) => {
-      // 保存に失敗しても実行は続けるが、黙らない。
-      // 黙ると「判定したのに次回も判定される」理由が分からなくなる。
-      note(`判定結果を保存できませんでした: ${(err as Error).message}`);
-    });
-  }
-  // 判定できなかった（none）ときに実行を断らない。
-  // none は「対応していない」ではなく「測れなかった」。両対応なら試せる。
-  const effectiveMode: ToolsMode = toolsMode.mode === 'none' ? 'both' : toolsMode.mode;
+  for (const w of toolsMode.warnings) note(w);
+  const effectiveMode = toolsMode.effective;
 
   const reasoning = pickReasoning(opts.think, ctx.config.generation.reasoning);
 
@@ -135,7 +106,7 @@ export async function runCommand(promptArgs: string[], opts: RunOptions): Promis
   }
 
   // そのモデルの文脈長（判定や --context で分かっていれば）。圧縮の閾値が変わる
-  const windowTokens = endpoint.capabilities.byModel?.[model]?.contextTokens ?? null;
+  const windowTokens = windowTokensFor(ctx, endpoint.id, model);
 
   // どの会話に書くか。続きなら、これまでのやり取りを読む（docs/spec/10-cli.md）
   const conversation = await chooseConversation(ctx, opts, {
@@ -361,70 +332,10 @@ export async function runCommand(promptArgs: string[], opts: RunOptions): Promis
     throw new ExitError(EXIT.runtime, '実行が失敗しました。', { silent: true });
 }
 
-function resolvePermission(opts: RunOptions, fallback: PermissionMode): PermissionMode {
-  const raw =
-    opts.permission ?? (opts.yes ? 'auto-edit' : undefined) ?? process.env.AKARI_PERMISSION_MODE;
-  if (raw === undefined) return fallback;
-  const map: Record<string, PermissionMode> = {
-    ask: 'ask',
-    'auto-edit': 'autoEdit',
-    autoedit: 'autoEdit',
-    autoEdit: 'autoEdit',
-    full: 'full',
-  };
-  const mode = map[raw];
-  if (!mode) {
-    throw new ExitError(
-      EXIT.usage,
-      `--permission は ask / auto-edit / full のいずれかです（受け取った値: ${raw}）。`,
-    );
-  }
-  return mode;
-}
-
-/** --tools-mode / 設定を、強制する渡し方へ解決する。auto なら null（判定に従う）。 */
-function resolveToolsModeOption(
-  opts: RunOptions,
-  fromConfig: 'auto' | ToolsMode,
-): ToolsMode | null {
-  const raw = opts.toolsMode ?? process.env.AKARI_TOOLS_MODE ?? fromConfig;
-  if (raw === 'auto' || raw === undefined) return null;
-  if (raw === 'native' || raw === 'prompted' || raw === 'both') return raw;
-  throw new ExitError(
-    EXIT.usage,
-    `--tools-mode は auto / native / prompted / both のいずれかです（受け取った値: ${raw}）。`,
-  );
-}
-
 function describeTools(opts: RunOptions, count: number): string {
   if (opts.noTools) return 'なし（--no-tools）';
   if (opts.readOnly) return `読み取りのみ ${count}種（--read-only）`;
   return `${count}種`;
-}
-
-function describeToolsMode(m: ToolsMode): string {
-  if (m === 'native') return '関数呼び出し';
-  if (m === 'prompted') return '本文ブロック（代替方式）';
-  return '両対応';
-}
-
-/**
- * どの閾値で圧縮するかを、どの設定から来ているかと一緒に出す。
- * 文脈長が分かると compactAtTokens は使われない。見えないと、試すときに迷う（実際に迷った）。
- */
-function describeContext(
-  settings: { mode: string; compactAtRatio: number; compactAtTokens: number },
-  windowTokens: number | null,
-): string {
-  if (settings.mode === 'off') return '文脈: 圧縮しない（context.mode が off）';
-  if (windowTokens === null) {
-    return `文脈: 長さ不明 / 約${settings.compactAtTokens.toLocaleString()}トークンを超えたら圧縮（context.compactAtTokens）`;
-  }
-  const hi = compactThreshold(settings, windowTokens, false);
-  const lo = compactThreshold(settings, windowTokens, true);
-  const range =
-    hi === lo ? `約${hi.toLocaleString()}` : `約${lo.toLocaleString()}〜${hi.toLocaleString()}`;
-  return `文脈: 長さ ${windowTokens.toLocaleString()} / ${range}トークンを超えたら圧縮（context.compactAtRatio ${settings.compactAtRatio}。サーバがトークン数を報告しなければ低いほう）`;
 }
 
 function describeConversation(conv: Awaited<ReturnType<typeof chooseConversation>>): string {
@@ -436,32 +347,6 @@ function describeConversation(conv: Awaited<ReturnType<typeof chooseConversation
   return conv.continued
     ? `会話: ${conv.target.id} の続き（これまで ${conv.transcript.length} 件）`
     : `会話: ${conv.target.id}（新規）`;
-}
-
-function describeMode(m: PermissionMode): string {
-  return m === 'ask' ? '承認する' : m === 'autoEdit' ? '編集は自動・コマンドは承認' : 'すべて自動';
-}
-
-function describeEnd(reason: string): string {
-  const map: Record<string, string> = {
-    done: '完了',
-    aborted: '中断',
-    'max-steps': 'ステップ上限で停止',
-    error: 'エラーで停止',
-    denied: '拒否により停止',
-    loop: '同じ操作の繰り返しを検出して停止',
-    'context-full': '文脈に入りきらないため停止',
-  };
-  return map[reason] ?? reason;
-}
-
-function summarizeArgs(args: unknown): string {
-  if (args === null || typeof args !== 'object') return '';
-  const rec = args as Record<string, unknown>;
-  if (typeof rec.command === 'string') return rec.command.slice(0, 120);
-  if (typeof rec.path === 'string') return rec.path;
-  if (typeof rec.pattern === 'string') return rec.pattern;
-  return '';
 }
 
 function indentBlock(text: string): string {
@@ -508,55 +393,6 @@ async function askApproval(
   } finally {
     rl.close();
   }
-}
-
-/**
- * 代替方式のとき、本文に混ざる akari-tool ブロックを画面から隠す。
- * 呼び出しの内容は直後の tool-call 行に出るので、情報は失われない。
- * チャンクの途中でフェンスが割れても壊れないよう、末尾を持ち越す。
- */
-function createBlockFilter(): { feed: (chunk: string) => string; flush: () => string } {
-  const OPEN = '```akari-tool';
-  const CLOSE = '```';
-  let buf = '';
-  let hidden = false;
-
-  const feed = (chunk: string): string => {
-    buf += chunk;
-    let out = '';
-    for (;;) {
-      if (!hidden) {
-        const i = buf.indexOf(OPEN);
-        if (i === -1) {
-          // フェンスの先頭が末尾に掛かっているかもしれない分だけ残す
-          const keep = Math.min(buf.length, OPEN.length - 1);
-          out += buf.slice(0, buf.length - keep);
-          buf = buf.slice(buf.length - keep);
-          return out;
-        }
-        out += buf.slice(0, i);
-        buf = buf.slice(i + OPEN.length);
-        hidden = true;
-      } else {
-        const j = buf.indexOf(CLOSE);
-        if (j === -1) {
-          const keep = Math.min(buf.length, CLOSE.length - 1);
-          buf = buf.slice(buf.length - keep);
-          return out;
-        }
-        buf = buf.slice(j + CLOSE.length);
-        hidden = false;
-      }
-    }
-  };
-
-  const flush = (): string => {
-    const rest = hidden ? '' : buf;
-    buf = '';
-    return rest;
-  };
-
-  return { feed, flush };
 }
 
 async function readStdin(): Promise<string> {

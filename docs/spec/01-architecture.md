@@ -152,6 +152,7 @@ renderer は「表示用の写し」だけを持つ。書き込みは必ずメ�
 |---|---|---|---|
 | Electron | CLIとデスクトップで**同じTypeScriptの中核**を共有できる。3OSで描画が揃う | 待機時メモリが大きい（200-300MB目安） | Tauri + Node sidecar。coreはそのまま使える |
 | React + Vite | 情報密度の高い画面と差分表示を作りやすい。開発時の反映が速い | なし（規模相応） | — |
+| Ink（React でターミナル画面を組む）+ Node 22 以上 | CLI の対話画面（`17-interactive.md`）。デスクトップと同じ React の書き方で、入力欄・承認・状態の行を部品にできる。日本語入力のカーソル位置、Shift+Enter の区別（kitty キーボード方式）、貼り付けを扱える | Node 22 以上が要る（Node 20 は2026年4月で更新終了）。依存が増える | readline だけの素朴な対話（今の `akari chat` の形） |
 | TypeScript（strict） | 中核の契約を型で固定でき、CLI/デスクトップの取り違えを減らす | — | — |
 | JSONファイル保存（DBなし） | ネイティブモジュール不要で3OS×Electron×Nodeの組み合わせが増えない。手で読める | 全文検索が線形。1万会話規模で遅くなる | SQLite へ移行（`07-data.md` に移行方針） |
 | pnpm workspace | 依存の重複を避け、ローカル参照が素直 | — | npm workspaces |

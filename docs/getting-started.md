@@ -6,7 +6,7 @@
 
 ## 用意するもの
 
-- Node.js 20 以上
+- Node.js 22 以上
 - pnpm 9 以上（`corepack enable pnpm` で入る）
 - ローカルLLMサーバ 1つ。無くても、同梱の模擬サーバで一通り試せる。
 

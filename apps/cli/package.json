@@ -13,6 +13,12 @@
   },
   "dependencies": {
     "@akari/core": "workspace:*",
-    "commander": "^12.1.0"
+    "commander": "^12.1.0",
+    "ink": "7.1.1",
+    "react": "19.2.0"
+  },
+  "devDependencies": {
+    "@types/react": "19.2.2",
+    "ink-testing-library": "4.0.0"
   }
 }

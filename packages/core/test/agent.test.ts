@@ -868,3 +868,89 @@ test('その場で続けても、保存した会話から続けても、モデ�
     );
   }
 });
+
+// ---------------- 対話画面での使い方（docs/spec/17-interactive.md） ----------------
+
+test('同じ Session で続けて送ると、送るたびに別の実行になり、取り消しも1回ごと', async () => {
+  const { workspace, home, root } = await setup();
+  const provider = script(
+    { tool: 'write_file', args: { path: 'a.txt', content: '1\n' } },
+    { text: '書きました' },
+    { tool: 'write_file', args: { path: 'b.txt', content: '2\n' } },
+    { text: '書きました' },
+  );
+  const session = Session.create({
+    provider,
+    model: 'fake-model',
+    workspace,
+    root: home,
+    permissionMode: 'full',
+  });
+  const first = await run(session, 'a を書いて');
+  const firstId = session.runId;
+  const second = await run(session, 'b を書いて');
+  assert.notEqual(session.runId, firstId, '2回目は新しい実行 ID');
+  assert.deepEqual(first.end.changedFiles, ['a.txt']);
+  assert.deepEqual(second.end.changedFiles, ['b.txt'], '前の実行の変更を混ぜない');
+  const runStarts = [...first.events, ...second.events].filter((e) => e.type === 'run-start');
+  assert.equal(new Set(runStarts.map((e) => (e.type === 'run-start' ? e.runId : ''))).size, 2);
+
+  // 取り消しは直前の1回だけ
+  const undone = await session.undo();
+  assert.deepEqual(undone.restored, ['b.txt']);
+  await assert.rejects(() => fs.stat(path.join(root, 'b.txt')));
+  assert.equal(await fs.readFile(path.join(root, 'a.txt'), 'utf8'), '1\n');
+
+  // 2回目には1回目のやり取りが渡っている
+  const lastReq = provider.calls.at(-1)!;
+  assert.ok(lastReq.messages.some((m) => m.role === 'user' && m.content === 'a を書いて'));
+  assertValidForApi(lastReq.messages);
+});
+
+test('送る合間に権限・道具・モデルを変えられる', async () => {
+  const { workspace, home, root } = await setup();
+  const provider = script(
+    { text: 'こんにちは' },
+    { tool: 'write_file', args: { path: 'x.txt', content: 'x\n' } },
+    { text: '書けませんでした' },
+  );
+  const session = Session.create({
+    provider,
+    model: 'fake-model',
+    workspace,
+    root: home,
+    permissionMode: 'full',
+  });
+  await run(session, 'やあ');
+  session.reconfigure({ model: 'other-model', toolNames: ['read_file'], permissionMode: 'ask' });
+  assert.equal(session.model, 'other-model');
+  assert.equal(session.permissionMode, 'ask');
+  assert.deepEqual(session.toolNames, ['read_file']);
+  const { events } = await run(session, 'x を書いて');
+  assert.equal(provider.calls.at(-2)!.model, 'other-model');
+  assert.deepEqual(
+    provider.calls.at(-2)!.tools?.map((t) => t.name),
+    ['read_file'],
+    '渡す道具が変わる',
+  );
+  const result = events.find((e) => e.type === 'tool-result');
+  assert.ok(result && result.type === 'tool-result' && !result.ok, '渡していない道具は使えない');
+  await assert.rejects(() => fs.stat(path.join(root, 'x.txt')));
+});
+
+test('実行中は設定を変えられない', async () => {
+  const { workspace, home } = await setup();
+  const session = Session.create({
+    provider: script({ tool: 'write_file', args: { path: 'x.txt', content: 'x' } }),
+    model: 'fake-model',
+    workspace,
+    root: home,
+    permissionMode: 'ask',
+  });
+  for await (const ev of session.send('作って')) {
+    if (ev.type === 'approval-request') {
+      assert.throws(() => session.reconfigure({ permissionMode: 'full' }), /実行中/);
+      session.approve(ev.callId, { kind: 'abort' });
+    }
+  }
+});
