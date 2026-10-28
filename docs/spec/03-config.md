@@ -101,6 +101,7 @@
 | `mcpServers[].trust` | `ask`/`readOnly`/`full` | `ask` | MCP | 自動実行の範囲。`readOnly` はサーバの自己申告を信じる選択 |
 | `server.port` | 1024〜65535 | `7801` | ハーネスAPI | `akari serve` の待ち受けポート |
 | `server.allowOrigins` | 文字列配列 | `[]` | ハーネスAPI | 空ならブラウザからの要求を全拒否 |
+| `server.allowFullPermission` | 真偽 | `false` | ハーネスAPI | 真にしたときだけ、HTTP から `permissionMode: "full"` で頼める（`12-harness-api.md`「権限」） |
 | `agent.approvalTimeoutMs` | 整数 または null | `null` | 実行 | null は無期限。外部ツールが落ちた実行を放置したくないなら有限に |
 | `context.mode` | `auto`/`off` | `auto` | 全体 | 文脈が溢れたときに圧縮するか（`16-context.md`） |
 | `context.compactAtRatio` | 0.3〜0.95 | `0.7` | 文脈 | 文脈長の何割で圧縮するか |

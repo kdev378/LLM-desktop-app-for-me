@@ -17,6 +17,7 @@ export {
   type GenerationSettings,
   type AgentSettings,
   type ContextSettings,
+  type ServerSettings,
   type PermissionMode,
   type Credentials,
 } from './config/schema.js';
@@ -134,6 +135,14 @@ export {
   type UndoResult,
   type JournalFile,
 } from './agent/journal.js';
+export {
+  decideToolsMode,
+  parsePermission,
+  toolNamesFor,
+  windowTokensFor,
+  type ToolScope,
+  type ToolsModeDecision,
+} from './agent/setup.js';
 export {
   Session,
   type SessionOptions,

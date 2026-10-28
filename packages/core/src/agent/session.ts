@@ -187,6 +187,8 @@ export class Session {
   private tools: ToolSpec[];
   private unknownTools: string[];
   private lastUsage: ContextUsage | null = null;
+  /** 実行中に差し込まれた利用者の追記。次の手の前にモデルへ渡す（12-harness-api.md「messages」）。 */
+  private injected: string[] = [];
   /**
    * 生の記録（正本）。モデルへ送るメッセージは、呼ぶたびにここから組み立てる。
    * その場で続けても、保存した会話から続けても、同じ組み立て方になるようにするため。
@@ -308,6 +310,23 @@ export class Session {
     return true;
   }
 
+  /**
+   * 実行中に利用者の追記を差し込む。次の手の前にモデルへ渡る（今の生成は止めない）。
+   * 実行中でなければ false（呼び出し側は、続きとして新しく送る）。
+   */
+  inject(text: string): boolean {
+    if (!this.running || this.aborted) return false;
+    this.injected.push(text);
+    return true;
+  }
+
+  /** 差し込まれたが、実行が先に終わってモデルへ渡らなかった追記を取り出す。 */
+  takeInjected(): string[] {
+    const rest = this.injected;
+    this.injected = [];
+    return rest;
+  }
+
   /** 実行を止める。モデルのストリームと実行中のコマンドの両方へ伝わる。 */
   abort(): void {
     this.aborted = true;
@@ -329,6 +348,7 @@ export class Session {
     // 1回の送信を1つの実行にする。変更の記録と取り消しも1回ごと（17-interactive.md）
     if (this.sentOnce) this.currentRunId = ulid();
     this.sentOnce = true;
+    this.injected = [];
     this.running = true;
     this.aborted = false;
     this.controller = new AbortController();
@@ -403,6 +423,12 @@ export class Session {
       yield { type: 'step-start', step };
       this.currentStep = step;
       this.answered = new Set();
+      // 差し込まれた追記は、手と手の間に入れる（呼び出しと結果の並びを崩さない位置）
+      while (this.injected.length > 0) {
+        const text = this.injected.shift()!;
+        yield* this.addUser(text);
+        yield { type: 'user-message', text };
+      }
 
       let text = '';
       let reasoning = '';
@@ -558,6 +584,8 @@ export class Session {
 
       if (calls.length === 0) {
         yield { type: 'step-end', step, ...(usage ? { usage } : {}) };
+        // 答え終わる前に追記が届いていれば、それを渡して続ける
+        if (this.injected.length > 0 && !this.aborted && step < this.opts.maxSteps) continue;
         endReason = 'done';
         break;
       }

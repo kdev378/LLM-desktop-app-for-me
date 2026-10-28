@@ -35,6 +35,22 @@ akari serve --print-token         # トークンを標準出力へ1回だけ出�
 - `Origin` ヘッダが付いていて許可されていないリクエストは、トークンが正しくても拒否する
   （ブラウザ経由の悪用を塞ぐため）。
 
+### 宛先（Host）の確認
+
+`Host` ヘッダが `127.0.0.1:<port>` / `localhost:<port>` / `[::1]:<port>` 以外なら `403 host_not_allowed`。
+悪意のあるウェブページが自分のドメインを 127.0.0.1 へ向け直して叩く手口（DNS リバインディング）を塞ぐ。
+`/v1/health` も同じ。
+
+## 権限
+
+HTTP から頼める権限は、設定で決めた範囲までに限る。**API から権限を広げることはできない。**
+
+- `permissionMode: "full"` は、設定の `server.allowFullPermission` が真のときだけ受け付ける。
+  偽（既定）なら `403 full_permission_disabled`。
+  コマンドがまだ作業フォルダに閉じ込められていない（`11-roadmap.md` P3+）ため、
+  外部のツールが人の目を通さずにコマンドを実行できる状態を、既定では作らない。
+- `ask` / `autoEdit` の承認は、HTTP の承認要求（`approval-request` イベント）として出る。
+
 ## 形式
 
 - 要求・応答ともに JSON（`application/json`）。
@@ -86,7 +102,9 @@ akari serve --print-token         # トークンを標準出力へ1回だけ出�
   **ツール無しで勝手に走らせない。**
 
 ### `GET /v1/runs/{runId}/events`
-SSE。`05-agent.md` の `RunEvent` をそのまま流す。
+SSE。`05-agent.md` の `RunEvent` をそのまま流す。サーバ側の出来事として次も流す:
+`{"type":"status","status":"queued"|"running"|…}`（状態が変わったとき）、
+`{"type":"user-message","text":"…"}`（`/messages` で差し込んだ追記がモデルへ渡ったとき）。
 
 ```
 id: 12
@@ -101,14 +119,15 @@ data: {"type":"tool-call","callId":"c1","name":"edit_file","args":{…},"risk":"
   取りこぼした範囲が保持を超えていた場合は、`event: gap` を1件流して正直に伝える。
   黙って飛ばさない。
 - 実行が既に終わっていれば、保持されている全イベントを流して即座に閉じる。
+- イベントはファイルにも書く（下の「記録の保存」）。サーバを再起動しても、保持の範囲なら読み直せる。
 
 ### `POST /v1/runs/{runId}/approvals/{callId}`
 ```json
 { "decision": "allow" | "allowSession" | "deny" | "abort", "scope": "…", "feedback": "…" }
 ```
 - 未知の `callId`、既に解決済み、承認待ちでない → `409`。
-- 承認待ちのまま `agent.approvalTimeoutMs`（既定 無期限）を過ぎた場合の扱いは設定で決める。
-  外部ツールが落ちたまま実行が残るのを避けたいなら、有限値にする。
+- 承認待ちのまま `agent.approvalTimeoutMs`（既定 無期限）を過ぎたら、**拒否**として扱う
+  （モデルへは「承認の期限が切れました」と伝える）。外部ツールが落ちたまま実行が残るのを避けたいなら、有限値にする。
 
 ### `POST /v1/runs/{runId}/abort`
 中断する。`05-agent.md` の中断規則に従う。変更記録は保持される。
@@ -133,7 +152,8 @@ data: {"type":"tool-call","callId":"c1","name":"edit_file","args":{…},"risk":"
   "usage": { "prompt": 0, "completion": 0 }
 }
 ```
-`status`: `queued` / `running` / `waiting-approval` / `done` / `aborted` / `failed` / `max-steps`
+`status`: `queued` / `running` / `waiting-approval` / `done` / `aborted` / `failed` / `max-steps` /
+`interrupted`（サーバが落ちたときに走っていた。再起動後にそう記録し直す）
 
 ### `GET /v1/runs?label.channel=1234&status=running&limit=20`
 一覧。ラベルで絞れる。新しい順。
@@ -156,6 +176,24 @@ data: {"type":"tool-call","callId":"c1","name":"edit_file","args":{…},"risk":"
 
 ### `GET /v1/conversations/{id}` / `GET /v1/conversations`
 会話の内容と一覧。デスクトップ・CLIと同じ保存先を読む。
+
+## 記録の保存
+
+実行の記録はサーバを再起動しても API から取れる（オーナーの要望、2026-10-28）。
+
+```
+<root>/server/runs/<runId>.json          # 状態・ラベル・作業フォルダ・会話・終わり方・idempotencyKey（権限600）
+<root>/server/runs/<runId>.events.ndjson # イベント（連番つき、追記のみ）
+```
+
+- `GET /v1/runs` / `GET /v1/runs/{id}` / `transcript` / `diff` / `undo` は、再起動後も同じように答える。
+  会話の中身と変更の記録は、もともと会話（`04-chat.md`）と変更記録（`05-agent.md`）に残っている。
+- イベントの保持は「直近10,000件、または実行終了から1時間」のまま。超えた分はファイルからも消す。
+  `transcript` は会話から作るので、イベントが消えても取れる。
+- 走っている途中でサーバが落ちた実行は、再起動時に `interrupted` へ記録し直す
+  （書いたプロセスがもう居ないことを確かめてから）。続きは `/messages` で新しい実行として始められる。
+- `idempotencyKey` も保存し、再起動をまたいで24時間効かせる。
+- 実行の記録そのものは消さない（会話と同じく、利用者が消すまで残す）。
 
 ## 作業の隔離（git worktree）
 
@@ -202,6 +240,20 @@ merge は外部ツールの権限を持つエージェントの仕事（非目�
   本文は記録しない。
 - 認証失敗は `server.unauthorized` として、送信元アドレスとともに記録する。
 - トークンはログにも診断にも出さない。
+
+## 将来: 外からの接続（予定。まだ作らない）
+
+オーナーの要望（2026-10-28）。家の別の PC やサーバから叩けるようにする。今は `127.0.0.1` にしか束ねない。
+入れるときの条件（この全部が揃うまで外へ開かない）:
+
+- 待ち受ける場所を設定で明示する（`server.bind`）。既定は今と同じ `127.0.0.1`
+- 接続元の IP の範囲を許可制にする（`server.allowRemote: ["192.168.1.0/24"]`）。範囲外は接続直後に切る
+- 通信を暗号化する（TLS）。トークンが平文で流れるのを防ぐ。暗号化しないなら外へ開かない
+- 外から来た要求では、`full` を設定とは別にもう一段止められるようにする
+- `Host` の確認は、外からの名前（設定した名前）も許すように広げる
+
+コードでは、接続元・宛先・`Origin` の判定を1か所（受け付けの判定）にまとめておき、
+この段で判定を足すだけで済むようにしておく。
 
 ## 未解決
 

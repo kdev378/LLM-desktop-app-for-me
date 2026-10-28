@@ -92,6 +92,8 @@ export type RunEvent =
       fallback?: string;
     }
   | { type: 'notice'; level: 'info' | 'warn'; message: string }
+  /** 実行中に差し込まれた利用者の追記が、モデルへ渡った（12-harness-api.md「messages」）。 */
+  | { type: 'user-message'; text: string }
   | {
       type: 'run-end';
       reason: RunEndReason;

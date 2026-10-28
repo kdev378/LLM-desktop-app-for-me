@@ -954,3 +954,47 @@ test('実行中は設定を変えられない', async () => {
     }
   }
 });
+
+test('実行中に差し込んだ追記は、次の手の前にモデルへ渡る', async () => {
+  const { workspace, home } = await setup({ 'a.txt': 'x\n' });
+  const provider = script(
+    { tool: 'read_file', args: { path: 'a.txt' } },
+    { text: '追記も見ました' },
+  );
+  const session = Session.create({
+    provider,
+    model: 'fake-model',
+    workspace,
+    root: home,
+    permissionMode: 'full',
+  });
+  const events: RunEvent[] = [];
+  for await (const ev of session.send('読んで')) {
+    events.push(ev);
+    if (ev.type === 'tool-call') assert.equal(session.inject('やっぱり短くまとめて'), true);
+  }
+  const injected = events.find((e) => e.type === 'user-message');
+  assert.ok(
+    injected && injected.type === 'user-message' && injected.text === 'やっぱり短くまとめて',
+  );
+  const second = provider.calls[1]!;
+  assert.equal(second.messages.at(-1)!.content, 'やっぱり短くまとめて', '道具の結果の後ろに入る');
+  assertValidForApi(second.messages);
+  assert.equal(session.inject('終わった後'), false, '実行中でなければ受け付けない');
+});
+
+test('答え終わる直前に差し込まれた追記も、取りこぼさずに続けて渡す', async () => {
+  const { workspace, home } = await setup();
+  const provider = script({ text: '一つ目の答え' }, { text: '追記への答え' });
+  const session = Session.create({ provider, model: 'fake-model', workspace, root: home });
+  const events: RunEvent[] = [];
+  for await (const ev of session.send('質問')) {
+    events.push(ev);
+    if (ev.type === 'text-delta' && provider.calls.length === 1) session.inject('もう一つ');
+  }
+  assert.equal(provider.calls.length, 2);
+  assert.equal(provider.calls[1]!.messages.at(-1)!.content, 'もう一つ');
+  const end = events.find((e) => e.type === 'run-end');
+  assert.ok(end && end.type === 'run-end' && end.reason === 'done');
+  assert.deepEqual(session.takeInjected(), []);
+});

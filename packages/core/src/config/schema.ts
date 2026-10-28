@@ -90,6 +90,11 @@ export const agentSchema = z.object({
   toolOutputLimitBytes: z.number().int().min(1000).max(10000000).default(100000),
   allowedCommands: z.array(z.string()).default([]),
   /**
+   * 承認待ちの上限（ミリ秒）。過ぎたら拒否として扱う。null は無期限。
+   * 外部ツール（ハーネスAPI）が落ちたまま実行が残るのを避けたいときに有限にする。docs/spec/12-harness-api.md
+   */
+  approvalTimeoutMs: z.number().int().min(1000).max(86_400_000).nullable().default(null),
+  /**
    * 一致したら承認画面すら出さずに拒否する。docs/spec/05-agent.md
    * git の履歴を書き換える操作は、gitTools を有効にしても通さない。
    */
@@ -109,6 +114,18 @@ export const agentSchema = z.object({
       'git rebase',
       'git filter-branch',
     ]),
+});
+
+/** ハーネスAPI（akari serve）。docs/spec/12-harness-api.md */
+export const serverSchema = z.object({
+  port: z.number().int().min(1024).max(65535).default(7801),
+  /** ブラウザからの要求を許すオリジン。空なら全拒否。 */
+  allowOrigins: z.array(z.string()).default([]),
+  /**
+   * 真のときだけ HTTP から permissionMode "full" を受け付ける。
+   * コマンドがまだ作業フォルダに閉じ込められていないため、既定では受け付けない。
+   */
+  allowFullPermission: z.boolean().default(false),
 });
 
 export const uiSchema = z.object({
@@ -149,6 +166,7 @@ export const configSchema = z.object({
   concurrency: z
     .object({ maxParallelRuns: z.number().int().min(1).max(16).default(4) })
     .default({}),
+  server: serverSchema.default({}),
 });
 
 export type Config = z.infer<typeof configSchema>;
@@ -158,6 +176,7 @@ export type ModelCapability = z.infer<typeof modelCapabilitySchema>;
 export type GenerationSettings = z.infer<typeof generationSchema>;
 export type AgentSettings = z.infer<typeof agentSchema>;
 export type ContextSettings = z.infer<typeof contextSchema>;
+export type ServerSettings = z.infer<typeof serverSchema>;
 export type PermissionMode = AgentSettings['permissionMode'];
 
 export function defaultConfig(): Config {
