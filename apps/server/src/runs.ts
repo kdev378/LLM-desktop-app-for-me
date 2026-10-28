@@ -6,6 +6,7 @@ import {
   Workspace,
   createProvider,
   decideToolsMode,
+  detectSandbox,
   diffJournal,
   getProviderError,
   isAkariError,
@@ -25,6 +26,7 @@ import {
   type Provider,
   type ResolvedEndpoint,
   type RunEvent,
+  type SandboxStatus,
 } from '@akari/core';
 import { ApiError } from './http.js';
 import {
@@ -35,7 +37,7 @@ import {
   type RunStatus,
   type StoredEvent,
 } from './run-store.js';
-import { createWorktree, listWorktrees, removeWorktree } from './worktree.js';
+import { createWorktree, gitCommonDirs, listWorktrees, removeWorktree } from './worktree.js';
 import { buildTranscript, type TranscriptData } from './transcript.js';
 
 /**
@@ -132,6 +134,14 @@ export class RunManager {
     }
   }
 
+  /** コマンドの閉じ込めが効くか（設定の mode も見る）。 */
+  async sandboxStatus(config?: Config): Promise<SandboxStatus> {
+    const cfg = config ?? (await loadConfig(this.opts.root)).config;
+    if (cfg.agent.sandbox.mode === 'off')
+      return { active: false, reason: 'agent.sandbox.mode が off' };
+    return detectSandbox();
+  }
+
   get counts(): { active: number; queued: number } {
     return { active: this.running, queued: this.queue.length };
   }
@@ -155,8 +165,21 @@ export class RunManager {
         403,
         'full_permission_disabled',
         'HTTP からは permissionMode "full" で頼めない設定です。',
-        'コマンドがまだ作業フォルダに閉じ込められていないため、既定では受け付けません。許すなら akari config set server.allowFullPermission true',
+        '許すなら akari config set server.allowFullPermission true',
       );
+    }
+    if (permissionMode === 'full') {
+      // 閉じ込められない環境では、許していても断る（外部のツールが人の目を通さずに、
+      // 閉じ込めなしでコマンドを実行する状態を作らない。12-harness-api.md「権限」）
+      const sandbox = await this.sandboxStatus(config);
+      if (!sandbox.active) {
+        throw new ApiError(
+          403,
+          'full_without_sandbox',
+          'コマンドを閉じ込められない環境なので、HTTP からは full で頼めません。',
+          sandbox.reason,
+        );
+      }
     }
     const tools = input.tools ?? null;
     if (tools) {
@@ -385,6 +408,9 @@ export class RunManager {
         toolNames,
         maxSteps: record.maxSteps,
         toolsMode: decision.effective,
+        sandbox: fresh.agent.sandbox,
+        // worktree では git commit が元のリポジトリの .git に書く。そこだけ書き込みを許す
+        ...(record.worktree ? { sandboxExtraWrite: await gitCommonDirs(record.workspace) } : {}),
         limits: {
           commandTimeoutMs: fresh.agent.commandTimeoutMs,
           toolOutputLimitBytes: fresh.agent.toolOutputLimitBytes,

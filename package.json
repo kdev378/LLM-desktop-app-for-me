@@ -14,7 +14,8 @@
     "test": "pnpm -r test",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "akari": "node apps/cli/dist/index.js"
+    "akari": "node apps/cli/dist/index.js",
+    "test:sandbox": "pnpm -r build && node --test --experimental-strip-types packages/core/test/sandbox.test.ts"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

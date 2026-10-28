@@ -94,6 +94,18 @@ export const agentSchema = z.object({
    * 外部ツール（ハーネスAPI）が落ちたまま実行が残るのを避けたいときに有限にする。docs/spec/12-harness-api.md
    */
   approvalTimeoutMs: z.number().int().min(1000).max(86_400_000).nullable().default(null),
+  /** コマンドの閉じ込め。docs/spec/05-agent.md「コマンドの閉じ込め」 */
+  sandbox: z
+    .object({
+      /** auto … 使えれば使う / required … 使えなければコマンドを実行しない / off … 使わない */
+      mode: z.enum(['auto', 'required', 'off']).default('auto'),
+      /** 既定のキャッシュに加えて、書き込みを許す場所。~ で始めてよい。 */
+      allowWrite: z.array(z.string().min(1)).default([]),
+      /** 作業フォルダの中の秘密のファイル（.env など）を読めるようにする。 */
+      allowWorkspaceSecrets: z.boolean().default(false),
+      network: z.boolean().default(true),
+    })
+    .default({}),
   /**
    * 一致したら承認画面すら出さずに拒否する。docs/spec/05-agent.md
    * git の履歴を書き換える操作は、gitTools を有効にしても通さない。
@@ -177,6 +189,7 @@ export type GenerationSettings = z.infer<typeof generationSchema>;
 export type AgentSettings = z.infer<typeof agentSchema>;
 export type ContextSettings = z.infer<typeof contextSchema>;
 export type ServerSettings = z.infer<typeof serverSchema>;
+export type SandboxSettings = AgentSettings['sandbox'];
 export type PermissionMode = AgentSettings['permissionMode'];
 
 export function defaultConfig(): Config {

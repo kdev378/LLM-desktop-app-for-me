@@ -66,6 +66,7 @@ async function setup(
     full?: boolean;
     approvalTimeoutMs?: number;
     eventsKeep?: number;
+    sandboxMode?: 'auto' | 'required' | 'off';
     root?: string;
     files?: Record<string, string>;
   } = {},
@@ -100,7 +101,10 @@ async function setup(
       ],
       activeEndpointId: 'ep_t',
       server: { allowFullPermission: opts.full ?? false },
-      agent: { approvalTimeoutMs: opts.approvalTimeoutMs ?? null },
+      agent: {
+        approvalTimeoutMs: opts.approvalTimeoutMs ?? null,
+        sandbox: { mode: opts.sandboxMode ?? 'auto' },
+      },
     });
     await saveConfig(config, root);
   }
@@ -290,6 +294,23 @@ test('HTTP からの full は、設定で許したときだけ', async () => {
     assert.equal(r.status, 201);
   } finally {
     await allowed.server.close();
+  }
+});
+
+test('閉じ込められないなら、allowFullPermission でも HTTP からの full は断る', async () => {
+  const s = await setup({ full: true, sandboxMode: 'off' });
+  try {
+    const r = await s.call('POST', '/v1/runs', {
+      prompt: 'x',
+      workspace: s.repo,
+      permissionMode: 'full',
+    });
+    assert.equal(r.status, 403);
+    assert.equal(r.body.error.code, 'full_without_sandbox');
+    const health = await (await fetch(`${s.server.url}/v1/health`)).json();
+    assert.deepEqual(health.sandbox, { active: false, reason: 'agent.sandbox.mode が off' });
+  } finally {
+    await s.server.close();
   }
 });
 
@@ -486,6 +507,39 @@ test('2つの実行を別々の worktree で同時に走らせても、互いの
     const del = await s.call('DELETE', `/v1/runs/${a.body.runId}/worktree`);
     assert.equal(del.body.removed, true);
     await assert.rejects(() => fs.stat(a.body.workspace));
+  } finally {
+    await s.server.close();
+  }
+});
+
+test('worktree の中の git commit は、閉じ込めの中でも通る（元の .git には書ける）', async () => {
+  const s = await setup({
+    full: true,
+    script: (req, turn) =>
+      turn === 0
+        ? {
+            tool: 'run_command',
+            args: {
+              command:
+                'echo 追記 >> README.md && git -c user.email=a@a -c user.name=a commit -qam 変更 && git log --oneline | head -1',
+            },
+          }
+        : { text: 'コミットしました' },
+  });
+  try {
+    const health = await (await fetch(`${s.server.url}/v1/health`)).json();
+    const { runId, branch } = (
+      await s.call('POST', '/v1/runs', {
+        prompt: 'コミットして',
+        workspace: s.repo,
+        permissionMode: 'full',
+        git: { worktree: true },
+      })
+    ).body;
+    await waitFor(async () => (await statusOf(s, runId)).status === 'done');
+    const result = s.provider.calls.at(-1)!.messages.find((m) => m.role === 'tool')!.content;
+    assert.match(result, /終了コード: 0/, `閉じ込め: ${JSON.stringify(health.sandbox)}\n${result}`);
+    assert.match(s.git('log', '--oneline', branch), /変更/, 'ブランチにコミットが入った');
   } finally {
     await s.server.close();
   }

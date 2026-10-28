@@ -33,6 +33,8 @@ import type {
 import type { ConversationRecorder, RecordedMessage } from './recorder.js';
 import { buildApiMessages, type TranscriptEntry } from './transcript.js';
 import { RECALL_TOOLS } from '../tools/recall.js';
+import { SECRET_ACCESS_TOOL_NAME, requestSecretAccessTool } from '../tools/secrets.js';
+import { detectSandbox, hasWorkspaceSecrets, type SandboxStatus } from '../tools/sandbox.js';
 import {
   compactThreshold,
   estimateTokens,
@@ -42,7 +44,7 @@ import {
 } from '../context/budget.js';
 import { compact } from '../context/compactor.js';
 import { renderDigest, type Compaction } from '../context/digest.js';
-import type { ContextSettings } from '../config/schema.js';
+import type { ContextSettings, SandboxSettings } from '../config/schema.js';
 import type { ChatMessage, ToolDefinition } from '../provider/types.js';
 import type { Logger } from '../diagnostics/logger.js';
 
@@ -83,6 +85,13 @@ export type SessionOptions = {
   context?: { settings: ContextSettings; windowTokens: number | null; endpointId: string };
   /** 続きから始めるときの、いちばん新しい圧縮の記録。 */
   compaction?: Compaction;
+  /**
+   * コマンドの閉じ込め（05-agent.md）。設定の agent.sandbox をそのまま渡す。
+   * 省略すると閉じ込めない（テストや、閉じ込めを持たない呼び出し。そのことは run-start に出る）。
+   */
+  sandbox?: SandboxSettings;
+  /** 閉じ込めの中で、既定の場所に加えて書き込みを許す場所（worktree の元の .git など）。 */
+  sandboxExtraWrite?: string[];
   projectInstructions?: string;
   conversationInstructions?: string;
   /**
@@ -189,6 +198,10 @@ export class Session {
   private lastUsage: ContextUsage | null = null;
   /** 実行中に差し込まれた利用者の追記。次の手の前にモデルへ渡す（12-harness-api.md「messages」）。 */
   private injected: string[] = [];
+  /** この実行の閉じ込めの状態。 */
+  private sandboxStatus: SandboxStatus | null = null;
+  /** 作業フォルダに秘密のファイルがあり、request_secret_access を渡すか。 */
+  private offerSecretAccess = false;
   /**
    * 生の記録（正本）。モデルへ送るメッセージは、呼ぶたびにここから組み立てる。
    * その場で続けても、保存した会話から続けても、同じ組み立て方になるようにするため。
@@ -365,6 +378,20 @@ export class Session {
     this.refusedInRun = false;
     // 「この実行中は許可」は文字どおりこの実行だけ。続けて送る使い方（対話画面）で持ち越さない
     this.sessionAllows.clear();
+    // 秘密のファイルの読み取りの許可も、この実行だけ
+    this.workspace.clearGrants();
+    const sandboxSettings = this.opts.sandbox;
+    this.workspace.setSecretsAllowed(sandboxSettings?.allowWorkspaceSecrets ?? false);
+    const usesCommands = this.tools.some((t) => t.name === 'run_command');
+    this.sandboxStatus = !sandboxSettings
+      ? null
+      : sandboxSettings.mode === 'off'
+        ? { active: false, reason: 'agent.sandbox.mode が off' }
+        : await detectSandbox();
+    this.offerSecretAccess =
+      this.tools.length > 0 &&
+      !(sandboxSettings?.allowWorkspaceSecrets ?? false) &&
+      (await hasWorkspaceSecrets(this.workspace.root));
     const journal = await ChangeJournal.create(this.runId, this.workspace.root, this.opts.root);
     this.journal = journal;
 
@@ -384,7 +411,18 @@ export class Session {
       toolNames: this.tools.map((t) => t.name),
       toolsMode,
       ...(this.opts.conversationId ? { conversationId: this.opts.conversationId } : {}),
+      ...(usesCommands && this.sandboxStatus ? { sandbox: this.sandboxStatus } : {}),
     };
+    if (usesCommands && this.sandboxStatus && !this.sandboxStatus.active) {
+      yield {
+        type: 'notice',
+        level: 'warn',
+        message:
+          sandboxSettings?.mode === 'required'
+            ? `コマンドを閉じ込められないため、この実行ではコマンドを実行しません（${this.sandboxStatus.reason}）。`
+            : `コマンドは閉じ込めずに実行されます（${this.sandboxStatus.reason}）。作業フォルダの外の書き込みや秘密の読み取りを、コマンドからは塞げません。`,
+      };
+    }
     yield* this.persist((r) => r.runStarted(this.runId));
     yield* this.addUser(input);
 
@@ -697,6 +735,15 @@ export class Session {
       callId: call.id,
       logger: this.opts.logger,
       transcript: () => this.entries,
+      ...(this.opts.sandbox && this.sandboxStatus
+        ? {
+            sandbox: {
+              status: this.sandboxStatus,
+              settings: this.opts.sandbox,
+              extraWrite: this.opts.sandboxExtraWrite ?? [],
+            },
+          }
+        : {}),
     };
 
     let preview: ToolPreview | undefined;
@@ -727,10 +774,29 @@ export class Session {
           ok: false,
           summary: check.message,
         };
-        yield* this.pushToolResult(call, false, `${check.message}\n${NO_WORKAROUND}`);
+        // 秘密のファイルは、利用者に許可を求める道を示す（迂回はさせない）
+        const tail =
+          check.secret && this.offerSecretAccess
+            ? '別の手段（コマンドなど）で読もうとしないでください。'
+            : NO_WORKAROUND;
+        yield* this.pushToolResult(call, false, `${check.message}\n${tail}`);
         yield* this.markRefused();
         return 'ok';
       }
+    }
+
+    // 道具ごとの事前の検査。求めても意味のない承認を出さない
+    const checked = await tool.check?.(args, ctx);
+    if (checked) {
+      yield {
+        type: 'tool-result',
+        callId: call.id,
+        name: tool.name,
+        ok: checked.ok,
+        summary: checked.summary,
+      };
+      yield* this.pushToolResult(call, checked.ok, checked.content);
+      return 'ok';
     }
 
     // 拒否リストは承認より前。承認画面すら出さない。
@@ -883,6 +949,9 @@ export class Session {
       };
     }
 
+    // 秘密のファイルの読み取りは、どの権限でも毎回聞く（「この実行中は許可」も出さない）
+    if (name === SECRET_ACCESS_TOOL_NAME) return { required: true, scope: null };
+
     if (scope && this.sessionAllows.has(scope)) return { required: false, scope };
 
     // 一度断った後は、コマンドを自動で通さない（断られた後の迂回を止める）
@@ -915,8 +984,12 @@ export class Session {
    * 道具を渡さない実行（--no-tools）には足さない。
    */
   private activeTools(): ToolSpec[] {
-    if (this.compaction === null || this.tools.length === 0) return this.tools;
-    return [...this.tools, ...RECALL_TOOLS];
+    if (this.tools.length === 0) return this.tools;
+    return [
+      ...this.tools,
+      ...(this.compaction !== null ? RECALL_TOOLS : []),
+      ...(this.offerSecretAccess ? [requestSecretAccessTool] : []),
+    ];
   }
 
   /** 送るものを組み立てる。圧縮していれば圧縮版を足し、圧縮した生の記録は送らない。 */
@@ -1176,6 +1249,7 @@ function describeApproval(tool: ToolSpec, preview: ToolPreview | undefined): str
   if (preview?.kind === 'diff') return `${preview.path} を書き換えます。`;
   if (preview?.kind === 'delete')
     return `${preview.path} を削除します（${preview.bytes} バイト）。`;
+  if (preview?.kind === 'text') return preview.text;
   return `${tool.name} を実行します。`;
 }
 

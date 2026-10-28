@@ -933,6 +933,37 @@ kill $SERVE
 **報告してほしいこと**: 各期待どおりだったか。違ったら、そのコマンドの出力そのまま。
 特に、モデルが承認待ちになるまでの時間と、`transcript` が貼って読めるか。
 
+### 11-9. コマンドの閉じ込め（P3+）
+
+**macOS で確かめてほしい。** こちら（Linux）では bubblewrap で確かめてあるが、macOS の Seatbelt は動かせていない。
+
+まず自動の確認（偽のホームと作業フォルダを作って、本物の閉じ込めの中でコマンドを動かす。あなたの `~/.ssh` などは読まない）:
+
+```sh
+pnpm test:sandbox
+```
+
+**期待**: `# pass 10` / `# fail 0` / `# skipped 0`。`skipped` が出たら、閉じ込めが使えないと判定された（その行の理由を教えてほしい）。
+失敗したら、出力をそのまま貼ってほしい。macOS の規則が外れているのはここで分かる。
+
+次に手で（作業フォルダは使い捨て。ホームの下に作る）:
+
+```sh
+mkdir -p ~/akari-sbx-try && cd ~/akari-sbx-try && echo 'API_KEY=dummy' > .env && echo x > a.txt
+akari -m <モデルID> --permission full
+```
+
+| 入力 | 期待 |
+|---|---|
+| （起動直後） | 見出しの下に `コマンド: 閉じ込めあり（macOS Seatbelt）` |
+| `run_command で cat .env を実行して` | `Operation not permitted` などで失敗し、モデルが `request_secret_access` で許可を求める（モデル次第）。承認の枠に理由が出る |
+| （求められたら）`y` | その実行の中で `.env` が読める |
+| `run_command で touch ~/akari-sbx-out.txt を実行して` | 失敗する。`ls ~/akari-sbx-out.txt` で、できていないことを確かめる |
+| `run_command で ls ~/.ssh を実行して` | 失敗する（中身が出ない） |
+| `run_command で npm --version と git status を実行して` | ふつうに動く |
+
+終わったら `rm -rf ~/akari-sbx-try`。
+
 ---
 
 ## 12. 報告してほしいこと
@@ -966,7 +997,7 @@ akari --verbose run "…"         # ログを debug に
 | `Agents-A1-4B` が `tool_calls` を返さない | モデルの配布物にツール用テンプレートが無いため。Akari 側の不具合ではない。代替方式で動く |
 | サーバが落ちているとき `chat` / `run` の終了コードが 1（`models` は 4） | 10秒版の不一致。新版で 4 に統一済み |
 | `akari config keys rm …` が動かない | `endpoints rm` の案内文が、まだ無いコマンドを指している |
-| `full` のとき、コマンド（`cat .env` など）なら作業フォルダの外や秘密ファイルを読み書きできる | 作業フォルダの境界はファイルの道具にしか効かない。コマンドを閉じ込める仕組みはまだ無い（ロードマップ P3+） |
+| 閉じ込めなしの環境（Windows、bubblewrap の無い Linux）では、コマンドなら作業フォルダの外や秘密ファイルを読み書きできる | 実行の最初に `閉じ込めなし（理由）` と出る。`agent.sandbox.mode required` でコマンドを止められる |
 | LM Studio で読み込まれていないモデルを指定すると失敗する / 遅い | サーバ側がその場で読み込むため。新版では `akari models` に `読込済`/`未読込` が出る。先に読み込んでおくのが確実 |
 
 ---

@@ -49,6 +49,9 @@ export type RunEvent =
       toolsMode: ToolsMode;
       /** 記録先の会話（保存するときだけ）。続きを指定するのに使う。 */
       conversationId?: string;
+      /** コマンドの閉じ込め（05-agent.md）。コマンドを渡すときだけ。閉じ込めないならその理由。 */
+      sandbox?:
+        { active: true; kind: 'seatbelt' | 'bubblewrap' } | { active: false; reason: string };
     }
   | { type: 'step-start'; step: number }
   | { type: 'text-delta'; text: string }

@@ -1,4 +1,5 @@
 import { spawn } from 'node:child_process';
+import { looksBlocked, sandboxCommand, type SandboxedCommand } from './sandbox.js';
 import { z } from 'zod';
 import { truncateMiddle } from './walk.js';
 import {
@@ -136,6 +137,9 @@ function safeEnv(): NodeJS.ProcessEnv {
   const out: NodeJS.ProcessEnv = {};
   for (const [k, v] of Object.entries(process.env)) {
     if (k.startsWith('AKARI_')) continue;
+    // 環境変数で渡す git の設定（GIT_CONFIG_COUNT / KEY_n / VALUE_n）は組で外す。
+    // 値に認証のヘッダが入りうるうえ、KEY_n だけを外すと git が全部のコマンドで失敗する
+    if (/^GIT_CONFIG_(COUNT|KEY_\d+|VALUE_\d+)$/.test(k)) continue;
     if (/(_|^)(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIALS)(_|$)/i.test(k)) continue;
     out[k] = v;
   }
@@ -191,9 +195,33 @@ export const runCommandTool: ToolSpec = {
     const cwd = await resolveCwd(a.cwd, ctx);
     if (typeof cwd !== 'string') return cwd;
 
+    // 閉じ込め（05-agent.md「コマンドの閉じ込め」）
+    let launch: SandboxedCommand | null = null;
+    const sb = ctx.sandbox;
+    if (sb && !sb.status.active && sb.settings.mode === 'required') {
+      return denied(
+        `コマンドを閉じ込められないため実行しません（agent.sandbox.mode が required）。${sb.status.reason}`,
+        'denied',
+      );
+    }
+    if (sb?.status.active) {
+      launch = await sandboxCommand(
+        sb.status,
+        {
+          workspace: ctx.workspace.root,
+          akariRoot: ctx.workspace.dataRoot,
+          settings: sb.settings,
+          grantedSecrets: ctx.workspace.grantedSecrets,
+          extraWrite: sb.extraWrite,
+        },
+        a.command,
+        cwd,
+      );
+    }
+
     const timeoutMs = a.timeoutMs ?? ctx.limits.commandTimeoutMs;
     const started = Date.now();
-    const result = await execute(a.command, cwd, timeoutMs, ctx);
+    const result = await execute(a.command, cwd, timeoutMs, ctx, launch);
     const durationMs = Date.now() - started;
 
     const parts: string[] = [];
@@ -225,11 +253,21 @@ export const runCommandTool: ToolSpec = {
     }
 
     const ok = result.code === 0;
+    // 塞がれて失敗したらしいときは、そう添える。モデルが別の手で何度も試して迷わないため
+    const note =
+      !ok && launch && looksBlocked(result.stderr)
+        ? '\n\n[akari] このコマンドは閉じ込めの中で動いています。作業フォルダ・一時フォルダ・道具のキャッシュの外への書き込みと、' +
+          '秘密の場所（~/.ssh など）や作業フォルダの中の秘密のファイル（.env など）の読み取りは塞いでいます。' +
+          '作業フォルダの中の秘密のファイルが要るなら、request_secret_access で理由を添えて利用者に許可を求めてください。'
+        : '';
+    const incomplete = launch?.secretsIncomplete
+      ? '\n\n[akari] 作業フォルダが大きいため、秘密のファイル（.env など）を全部は探しきれず、一部はコマンドから読めた可能性があります。'
+      : '';
     return {
       ok,
       errorKind: ok ? undefined : 'failed',
       summary: `終了コード ${result.code}（${(durationMs / 1000).toFixed(1)}秒）`,
-      content: `終了コード: ${result.code}\n所要時間: ${(durationMs / 1000).toFixed(1)}秒\n\n${body.text}`,
+      content: `終了コード: ${result.code}\n所要時間: ${(durationMs / 1000).toFixed(1)}秒\n\n${body.text}${note}${incomplete}`,
     };
   },
 };
@@ -255,10 +293,16 @@ function execute(
   cwd: string,
   timeoutMs: number,
   ctx: ToolContext,
+  launch: SandboxedCommand | null,
 ): Promise<ExecResult> {
   return new Promise((resolve) => {
     const isWin = process.platform === 'win32';
-    const child = spawn(isWin ? 'cmd' : '/bin/sh', isWin ? ['/c', command] : ['-c', command], {
+    const [file, argv] = launch
+      ? [launch.file, launch.args]
+      : isWin
+        ? ['cmd', ['/c', command]]
+        : ['/bin/sh', ['-c', command]];
+    const child = spawn(file, argv, {
       cwd,
       env: safeEnv(),
       // POSIX では新しいプロセスグループにする。子孫ごと確実に止めるため。

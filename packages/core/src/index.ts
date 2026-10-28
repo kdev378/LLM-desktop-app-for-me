@@ -18,6 +18,7 @@ export {
   type AgentSettings,
   type ContextSettings,
   type ServerSettings,
+  type SandboxSettings,
   type PermissionMode,
   type Credentials,
 } from './config/schema.js';
@@ -137,6 +138,17 @@ export {
   type UndoResult,
   type JournalFile,
 } from './agent/journal.js';
+export {
+  detectSandbox,
+  describeSandbox,
+  resetSandboxDetection,
+  seatbeltProfile,
+  bubblewrapArgs,
+  type SandboxStatus,
+  type SandboxKind,
+  type SandboxPolicy,
+} from './tools/sandbox.js';
+export { SECRET_ACCESS_TOOL_NAME } from './tools/secrets.js';
 export {
   decideToolsMode,
   parsePermission,

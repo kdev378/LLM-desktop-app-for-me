@@ -119,7 +119,13 @@ export async function startServer(opts: ServerOptions): Promise<ServerHandle> {
 
     if (a === 'health' && !b) {
       only(method, 'GET');
-      return sendJson(res, 200, { ok: true, version: opts.version, runs: runs.counts });
+      const sandbox = await runs.sandboxStatus();
+      return sendJson(res, 200, {
+        ok: true,
+        version: opts.version,
+        runs: runs.counts,
+        sandbox,
+      });
     }
 
     if (a === 'endpoints' && !b) {

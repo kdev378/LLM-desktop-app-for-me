@@ -101,7 +101,11 @@
 | `mcpServers[].trust` | `ask`/`readOnly`/`full` | `ask` | MCP | 自動実行の範囲。`readOnly` はサーバの自己申告を信じる選択 |
 | `server.port` | 1024〜65535 | `7801` | ハーネスAPI | `akari serve` の待ち受けポート |
 | `server.allowOrigins` | 文字列配列 | `[]` | ハーネスAPI | 空ならブラウザからの要求を全拒否 |
-| `server.allowFullPermission` | 真偽 | `false` | ハーネスAPI | 真にしたときだけ、HTTP から `permissionMode: "full"` で頼める（`12-harness-api.md`「権限」） |
+| `server.allowFullPermission` | 真偽 | `false` | ハーネスAPI | 真にしたときだけ、HTTP から `permissionMode: "full"` で頼める（`12-harness-api.md`「権限」）。コマンドを閉じ込められない環境では、真でも断る |
+| `agent.sandbox.mode` | `auto`/`required`/`off` | `auto` | 実行 | コマンドの閉じ込め（`05-agent.md`「コマンドの閉じ込め」） |
+| `agent.sandbox.allowWrite` | 文字列配列 | `[]` | 実行 | 閉じ込めの中で書き込みを許す場所（既定のキャッシュに加えて）。`~` で始めてよい |
+| `agent.sandbox.allowWorkspaceSecrets` | 真偽 | `false` | 実行 | 作業フォルダの中の秘密のファイル（`.env` など）を、ファイルの道具とコマンドから読めるようにする |
+| `agent.sandbox.network` | 真偽 | `true` | 実行 | 閉じ込めの中からネットワークを使えるか |
 | `agent.approvalTimeoutMs` | 整数 または null | `null` | 実行 | null は無期限。外部ツールが落ちた実行を放置したくないなら有限に |
 | `context.mode` | `auto`/`off` | `auto` | 全体 | 文脈が溢れたときに圧縮するか（`16-context.md`） |
 | `context.compactAtRatio` | 0.3〜0.95 | `0.7` | 文脈 | 文脈長の何割で圧縮するか |

@@ -206,12 +206,34 @@ akari run --no-save "…"                    # 保存しない
 1回目は見抜けない。`full` は信頼できる作業フォルダでだけ使い、
 大事なものは git にコミットしてから動かすこと。
 
-**コマンド（`run_command`）は作業フォルダに閉じ込められていない。**
-上の「作業フォルダの外」「`.env` の読み取り」の禁止は、ファイルの道具にしか効かない。
-コマンドは利用者の権限で動く本物のシェルなので、`cat .env` や `cat ~/.ssh/id_rsa`、
-作業フォルダの外への書き込みもできる。`full` ではそれが自動で通る。
-外部の接続先（OpenRouter など）を使っているなら、読んだ中身はそこへ送られる。
-秘密のあるフォルダでは `full` を使わないこと。
+### コマンドの閉じ込め
+
+コマンド（`run_command`）は OS の仕組みの中で動く（macOS は Seatbelt、Linux は bubblewrap）。
+実行の最初に `コマンド: 閉じ込めあり（…）` か `閉じ込めなし（理由）` が出る。
+
+| | 閉じ込めの中 |
+|---|---|
+| 作業フォルダ・一時フォルダ・道具のキャッシュ（`~/.npm` `~/.cache` `~/.cargo/registry` など）への書き込み | できる |
+| それ以外への書き込み（`echo x > ../a`、`touch ~/a`） | **できない** |
+| `~/.ssh` `~/.aws` `~/.gnupg` `~/.kube` `~/.netrc`、キーチェーン、Akari の設定と鍵の読み取り | **できない** |
+| 作業フォルダの中の `.env` などの読み取り | **できない**。モデルが理由を添えて許可を求められる（下） |
+| システムやホームに入った道具（コンパイラ、`node`、`git` など） | ふつうに使える |
+| ネットワーク | 使える（`agent.sandbox.network false` で塞ぐ） |
+
+- **閉じ込められない環境**（Linux で bubblewrap が無い、Windows など）では、閉じ込めずに動かし、実行のたびに警告する。
+  閉じ込められないならコマンドを実行させたくない場合は `akari config set agent.sandbox.mode required`
+- Linux で bubblewrap を入れる: `sudo apt install bubblewrap`（Debian / Ubuntu）など
+- 書き込みを許す場所を足す: `akari config set agent.sandbox.allowWrite '["~/.mytool"]'`
+- 塞がれて失敗したコマンドの結果には、閉じ込め中であることが添えられる（モデルが迷わないため）
+
+**作業フォルダの中の秘密のファイル（`.env` など）が要るとき**: モデルが `request_secret_access` で、
+ファイルと理由を示して許可を求める。**どの権限（`full` でも）でも、毎回あなたに聞く。**
+許すと、その実行の間だけ `read_file` とコマンドから読める（中身はモデルへ渡り、会話に保存される）。
+その作業フォルダではいつも読ませてよいなら `akari config set agent.sandbox.allowWorkspaceSecrets true`
+（設定は全体に効く）。
+
+**それでも完全な防壁ではない。** ネットワークは既定で使えるので、読める範囲のものは外へ送れる。
+`full` は信頼できる作業フォルダでだけ使い、大事なものは git にコミットしてから動かすこと。
 
 ### 道具の渡し方（`--tools-mode`）
 
@@ -474,6 +496,10 @@ akari config set logging.level debug
 | `server.port` | 1024〜65535 | `7801` |
 | `server.allowOrigins` | 文字列配列（JSON） | `[]`（ブラウザからは全拒否） |
 | `server.allowFullPermission` | `true` / `false` | `false`（HTTP から full で頼めない） |
+| `agent.sandbox.mode` | `auto` / `required` / `off` | `auto`（使えれば閉じ込める） |
+| `agent.sandbox.allowWrite` | 文字列配列（JSON。`~` 可） | `[]`（既定のキャッシュに加えて） |
+| `agent.sandbox.allowWorkspaceSecrets` | `true` / `false` | `false` |
+| `agent.sandbox.network` | `true` / `false` | `true` |
 
 `deniedCommands` の既定（部分一致で拒否。**承認画面すら出ない**）:
 
@@ -603,7 +629,7 @@ akari serve --print-token          # トークンを標準出力へ出す（案�
 - Ctrl+C で止める。走っている実行は中断する（変更の記録は残る）
 - 同じポートで別の `akari serve` が動いていれば、起動せずに終了コード2
 - **HTTP から `full` では頼めない**（既定）。許すなら `akari config set server.allowFullPermission true`。
-  コマンドがまだ作業フォルダに閉じ込められていないため（「`full` でも通らないもの」の下の注意）
+  **コマンドを閉じ込められない環境では、許していても断る**（`full_without_sandbox`）。起動時の表示に、閉じ込めの状態と、full で頼めるかが出る
 - 実行の記録は再起動しても API から取れる。走っている途中でサーバが落ちた実行は `interrupted` になる
 
 ### 試す

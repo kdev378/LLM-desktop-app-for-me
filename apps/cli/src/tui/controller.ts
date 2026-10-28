@@ -1,6 +1,7 @@
 import {
   ChangeJournal,
   Session,
+  describeSandbox,
   formatUnifiedDiff,
   tildify,
   type ApprovalDecision,
@@ -151,6 +152,7 @@ export class Controller {
   private lastRun: { runId: string; changedFiles: string[] } | null = null;
   private instructionsShown = false;
   private shownNotices = new Set<string>();
+  private lastSandbox: string | null = null;
 
   private nextId = 1;
   private state: Snapshot;
@@ -397,6 +399,7 @@ export class Controller {
       toolNames: toolNamesFor(setup.scope),
       maxSteps: setup.maxSteps,
       toolsMode: setup.toolsMode,
+      sandbox: this.ctx.config.agent.sandbox,
       ...(this.reasoning ? { reasoning: this.reasoning } : {}),
       limits: {
         commandTimeoutMs: this.ctx.config.agent.commandTimeoutMs,
@@ -454,12 +457,25 @@ export class Controller {
     },
   ): void {
     switch (ev.type) {
-      case 'run-start':
+      case 'run-start': {
+        const lines: Line[] = [];
+        // 閉じ込めの状態は最初の1回と、変わったときだけ出す
+        const sb = ev.sandbox ? describeSandbox(ev.sandbox) : null;
+        if (sb && sb !== this.lastSandbox) {
+          lines.push(
+            ev.sandbox!.active
+              ? line(`コマンド: ${sb}`, 'dim')
+              : [seg('! ', 'warn'), seg(`コマンド: ${sb}`, 'warn')],
+          );
+          this.lastSandbox = sb;
+        }
         if (!this.instructionsShown && ev.instructionFiles.length > 0) {
-          this.pushLines([line(`指示ファイル: ${ev.instructionFiles.join(', ')}`, 'dim')]);
+          lines.push(line(`指示ファイル: ${ev.instructionFiles.join(', ')}`, 'dim'));
         }
         this.instructionsShown = true;
+        this.pushLines(lines);
         break;
+      }
       case 'text-delta': {
         const shown = filter ? filter.feed(ev.text) : ev.text;
         if (shown !== '') this.appendStreaming(shown);

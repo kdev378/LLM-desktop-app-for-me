@@ -179,6 +179,27 @@ test('null の引数は指定なしとして扱う（必須なら弾く）', asy
   assert.equal(bad.errorKind, 'invalid');
 });
 
+test('run_command は、環境変数の git の設定を組で外す（片方だけ外すと git が動かない）', async () => {
+  const c = await ctx();
+  const saved = { ...process.env };
+  process.env.GIT_CONFIG_COUNT = '1';
+  process.env.GIT_CONFIG_KEY_0 = 'http.extraHeader';
+  process.env.GIT_CONFIG_VALUE_0 = 'Authorization: Bearer ひみつ';
+  try {
+    const r = await c
+      .tool('run_command')
+      .run({ command: 'git --version && env | grep -c ^GIT_CONFIG || true' }, c.make());
+    assert.equal(r.ok, true, r.content);
+    assert.match(r.content, /git version/);
+    assert.ok(!r.content.includes('ひみつ'));
+  } finally {
+    for (const k of ['GIT_CONFIG_COUNT', 'GIT_CONFIG_KEY_0', 'GIT_CONFIG_VALUE_0']) {
+      if (saved[k] === undefined) delete process.env[k];
+      else process.env[k] = saved[k];
+    }
+  }
+});
+
 test('delete_file は記録を残して消す', async () => {
   const c = await ctx({ 'gone.txt': 'bye\n' });
   const r = await c.tool('delete_file').run({ path: 'gone.txt' }, c.make());

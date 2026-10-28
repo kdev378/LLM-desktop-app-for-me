@@ -2,6 +2,8 @@ import type { Workspace } from './workspace.js';
 import type { ChangeJournal, FileChange } from '../agent/journal.js';
 import type { TranscriptEntry } from '../agent/transcript.js';
 import type { Logger } from '../diagnostics/logger.js';
+import type { SandboxSettings } from '../config/schema.js';
+import type { SandboxStatus } from './sandbox.js';
 
 /** 仕様: docs/spec/05-agent.md「ツール一覧」 */
 
@@ -34,6 +36,13 @@ export type ToolContext = {
   logger?: Logger;
   /** この会話の生の記録（recall_search / recall_read が使う。16-context.md）。 */
   transcript?: () => readonly TranscriptEntry[];
+  /** コマンドの閉じ込め（05-agent.md）。省略すると閉じ込めない（テストや、閉じ込めを持たない呼び出し）。 */
+  sandbox?: {
+    status: SandboxStatus;
+    settings: SandboxSettings;
+    /** 既定の場所に加えて書き込みを許す場所（worktree の元の .git など）。 */
+    extraWrite: string[];
+  };
 };
 
 export type ToolResult = {
@@ -70,6 +79,11 @@ export type ToolSpec = {
    * 境界の外なら承認画面すら出さずに拒否する（docs/spec/05-agent.md）。
    */
   pathsOf?: (args: unknown) => PathUse[];
+  /**
+   * 承認を求める前の検査。結果を返したら、承認も実行もせずにそれをモデルへ返す
+   * （求めても意味のない承認を、利用者に出さないため）。
+   */
+  check?: (args: unknown, ctx: ToolContext) => Promise<ToolResult | null>;
   /** 承認を求める前に、何が起きるかを見せるための材料。 */
   preview?: (args: unknown, ctx: ToolContext) => Promise<ToolPreview | undefined>;
   run: (args: unknown, ctx: ToolContext) => Promise<ToolResult>;

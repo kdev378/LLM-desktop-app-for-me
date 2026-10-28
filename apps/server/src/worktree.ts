@@ -18,6 +18,16 @@ async function git(cwd: string, args: string[]): Promise<string> {
   return stdout.trim();
 }
 
+/** worktree が書き込む、元のリポジトリの .git（git commit に要る）。取れなければ空。 */
+export async function gitCommonDirs(dir: string): Promise<string[]> {
+  try {
+    const common = await git(dir, ['rev-parse', '--path-format=absolute', '--git-common-dir']);
+    return [await fs.realpath(common)];
+  } catch {
+    return [];
+  }
+}
+
 export function worktreesDir(root: string): string {
   return path.join(root, 'worktrees');
 }

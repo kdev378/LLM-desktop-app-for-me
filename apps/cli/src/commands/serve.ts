@@ -1,5 +1,5 @@
 import path from 'node:path';
-import { Workspace, tildify } from '@akari/core';
+import { Workspace, describeSandbox, detectSandbox, tildify } from '@akari/core';
 import { ApiError, startServer } from '@akari/server';
 import { createContext, type GlobalOptions } from '../context.js';
 import { ExitError, EXIT } from '../exit.js';
@@ -60,11 +60,17 @@ export async function serveCommand(opts: ServeOptions): Promise<void> {
       `  既定の作業フォルダ: ${defaultWorkspace ? tildify(defaultWorkspace) : 'なし（実行ごとに workspace を指定）'}`,
     ),
   );
-  info(
-    c.dim(
-      `  HTTP から full で頼めるか: ${ctx.config.server.allowFullPermission ? c.yellow('はい（server.allowFullPermission）') : 'いいえ（既定）'}`,
-    ),
-  );
+  const sandbox =
+    ctx.config.agent.sandbox.mode === 'off'
+      ? ({ active: false, reason: 'agent.sandbox.mode が off' } as const)
+      : await detectSandbox();
+  info(c.dim(`  コマンド: ${describeSandbox(sandbox)}`));
+  const full = !ctx.config.server.allowFullPermission
+    ? 'いいえ（既定）'
+    : sandbox.active
+      ? c.yellow('はい（server.allowFullPermission）')
+      : 'いいえ（閉じ込められないため。server.allowFullPermission は入っています）';
+  info(c.dim(`  HTTP から full で頼めるか: ${full}`));
   info(c.dim('  止めるには Ctrl+C'));
   if (opts.printToken) out(handle.token);
 

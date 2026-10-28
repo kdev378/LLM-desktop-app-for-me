@@ -28,6 +28,8 @@ export type ResolveDenied = {
   reason: 'outside' | 'denied' | 'invalid';
   /** モデルへ返す文言。理由が分かれば別の手を採れる。 */
   message: string;
+  /** 秘密のファイルだから断った（request_secret_access で許可を求められる）。 */
+  secret?: boolean;
 };
 
 export type ResolveResult = ResolveOk | ResolveDenied;
@@ -42,6 +44,11 @@ const SECRET_FILE_PATTERNS: RegExp[] = [
   /\.(pem|key|p12|pfx)$/i,
 ];
 
+/** 鍵や資格情報が入りうるファイル名か。ファイルの道具とコマンドの閉じ込め（sandbox.ts）で同じ規則を使う。 */
+export function isSecretName(base: string): boolean {
+  return SECRET_FILE_PATTERNS.some((re) => re.test(base));
+}
+
 /** 書き込みを禁じるディレクトリ（作業フォルダからの相対）。 */
 const NO_WRITE_DIRS = ['.git'];
 
@@ -49,6 +56,10 @@ export class Workspace {
   /** 利用者が指定した作業フォルダ（シンボリックリンク解決済み）。 */
   readonly root: string;
   private readonly akariRoot: string;
+  /** 利用者が読み取りを許した秘密のファイル（絶対パス）。その実行の間だけ。 */
+  private granted = new Set<string>();
+  /** 設定 agent.sandbox.allowWorkspaceSecrets。真なら秘密のファイルも読める。 */
+  private secretsAllowed = false;
 
   private constructor(root: string, akariRoot: string) {
     this.root = root;
@@ -86,6 +97,30 @@ export class Workspace {
       throw new Error(`Akari のデータの中を作業フォルダにはできません: ${requested}`);
     }
     return new Workspace(real, akariReal);
+  }
+
+  /** Akari のデータの場所（実体のパス）。 */
+  get dataRoot(): string {
+    return this.akariRoot;
+  }
+
+  /** 設定で、秘密のファイルを読めるようにするか。 */
+  setSecretsAllowed(allowed: boolean): void {
+    this.secretsAllowed = allowed;
+  }
+
+  /** 利用者が読み取りを許した秘密のファイル。request_secret_access から。 */
+  grantSecret(absolute: string): void {
+    this.granted.add(absolute);
+  }
+
+  get grantedSecrets(): string[] {
+    return [...this.granted];
+  }
+
+  /** 実行の区切りで、許可を消す（許可はその実行の間だけ）。 */
+  clearGrants(): void {
+    this.granted.clear();
   }
 
   /** テスト用。実在チェックを飛ばして組み立てる。 */
@@ -134,7 +169,7 @@ export class Workspace {
     }
 
     const relative = path.relative(this.root, resolved.real);
-    const denied = this.checkRules(relative, mode);
+    const denied = this.checkRules(relative, mode, resolved.real);
     if (denied) return denied;
 
     return {
@@ -145,7 +180,7 @@ export class Workspace {
     };
   }
 
-  private checkRules(relative: string, mode: AccessMode): ResolveDenied | null {
+  private checkRules(relative: string, mode: AccessMode, real: string): ResolveDenied | null {
     const segments = relative.split(path.sep).filter((s) => s !== '');
     const base = segments[segments.length - 1] ?? '';
 
@@ -161,16 +196,15 @@ export class Workspace {
       }
     }
 
-    if (mode === 'read') {
-      for (const re of SECRET_FILE_PATTERNS) {
-        if (re.test(base)) {
-          return {
-            ok: false,
-            reason: 'denied',
-            message: `${base} は鍵や資格情報が入りうるため読めません。`,
-          };
-        }
-      }
+    if (mode === 'read' && !this.secretsAllowed && !this.granted.has(real) && isSecretName(base)) {
+      return {
+        ok: false,
+        reason: 'denied',
+        secret: true,
+        message:
+          `${base} は鍵や資格情報が入りうるため読めません。` +
+          '作業に要るなら、request_secret_access で理由を添えて利用者に許可を求められます。',
+      };
     }
     return null;
   }

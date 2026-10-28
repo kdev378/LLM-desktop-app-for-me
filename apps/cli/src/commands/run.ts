@@ -3,6 +3,7 @@ import path from 'node:path';
 import {
   Workspace,
   Session,
+  describeSandbox,
   createProvider,
   type ApprovalDecision,
   type RunEvent,
@@ -139,6 +140,7 @@ export async function runCommand(promptArgs: string[], opts: RunOptions): Promis
     toolNames,
     maxSteps,
     toolsMode: effectiveMode,
+    sandbox: ctx.config.agent.sandbox,
     ...(reasoning ? { reasoning } : {}),
     limits: {
       commandTimeoutMs: ctx.config.agent.commandTimeoutMs,
@@ -187,6 +189,7 @@ export async function runCommand(promptArgs: string[], opts: RunOptions): Promis
               );
               out(c.dim('ファイルを触らせるには --no-tools を外してください。'));
             }
+            if (ev.sandbox) out(c.dim(`コマンド: ${describeSandbox(ev.sandbox)}`));
             if (ev.instructionFiles.length > 0)
               out(c.dim(`指示ファイル: ${ev.instructionFiles.join(', ')}`));
             out(c.dim(describeConversation(conversation)));
@@ -308,7 +311,7 @@ export async function runCommand(promptArgs: string[], opts: RunOptions): Promis
       // full でも聞く操作（削除、断られた後のコマンド）がある。そこで「full にして」と言わない
       hint:
         permissionMode === 'full'
-          ? '削除と、断られた後のコマンドは full でも確認が要ります。対話できる端末で実行してください。'
+          ? '削除・秘密のファイルの読み取り・断られた後のコマンドは、full でも確認が要ります。対話できる端末で実行してください。'
           : '自動で進めるには --permission auto-edit などを明示してください。',
       silent: ctx.json,
     });

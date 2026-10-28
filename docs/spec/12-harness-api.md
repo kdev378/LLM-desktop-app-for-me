@@ -47,8 +47,10 @@ HTTP から頼める権限は、設定で決めた範囲までに限る。**API 
 
 - `permissionMode: "full"` は、設定の `server.allowFullPermission` が真のときだけ受け付ける。
   偽（既定）なら `403 full_permission_disabled`。
-  コマンドがまだ作業フォルダに閉じ込められていない（`11-roadmap.md` P3+）ため、
-  外部のツールが人の目を通さずにコマンドを実行できる状態を、既定では作らない。
+- さらに、**コマンドを閉じ込められる環境（`05-agent.md`「コマンドの閉じ込め」）でなければ、真でも断る**
+  （`403 full_without_sandbox`）。外部のツールが人の目を通さずに、閉じ込めなしでコマンドを実行する状態を作らない
+  （オーナー承認、2026-10-28）。`agent.sandbox.mode` が `off` のときも断る。
+- `/v1/health` と serve の起動時の表示に、閉じ込めが効いているかを出す。
 - `ask` / `autoEdit` の承認は、HTTP の承認要求（`approval-request` イベント）として出る。
 
 ## 形式
