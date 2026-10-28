@@ -860,6 +860,76 @@ akari -m <モデルID>
 終了時に元へ戻している（kitty キーボード方式）。対応していない端末はこの頼みを無視するはずだが、
 macOS 標準のターミナルで本当に無視されるかは確かめていない。余計な文字が出たら教えてほしい。
 
+### 11-8. ハーネスAPI（`akari serve`、P3）
+
+端末を2つ使う（または `&` で裏に回す）。**全部 curl でできるので、Muse の台本で流せる。**
+モデルが道具を呼ぶかどうかはモデル次第なので、そこは**期待**として書いてある。
+
+```sh
+export AKARI_HOME=/tmp/akari-test-api
+rm -rf "$AKARI_HOME" /tmp/akari-repo && mkdir -p /tmp/akari-repo && cd /tmp/akari-repo
+git init -q && printf '# サンプル\nタイポがあります\n' > README.md && git add -A && git commit -qm init
+akari config endpoints add --name L --url http://localhost:1234/v1 --model <モデルID>
+akari serve --port 7801 > /tmp/serve.out 2> /tmp/serve.err & SERVE=$!   # 裏で動かす
+sleep 2 && cat /tmp/serve.err
+TOKEN=$(node -e 'console.log(require(process.argv[1]).token)' "$AKARI_HOME/server.json")
+H="Authorization: Bearer $TOKEN"
+```
+
+**期待**: `/tmp/serve.err` に `http://127.0.0.1:7801` と `HTTP から full で頼めるか: いいえ（既定）`。
+
+| 試すこと | コマンド | 期待 |
+|---|---|---|
+| 生きているか | `curl -s localhost:7801/v1/health` | `{"ok":true,…}`（トークン不要） |
+| トークンなし | `curl -s -o /dev/null -w '%{http_code}\n' localhost:7801/v1/runs` | `401` |
+| ブラウザ扱い | `curl -s -H "$H" -H 'Origin: https://example.com' localhost:7801/v1/runs` | `origin_not_allowed`（403） |
+| full は断る | `curl -s -H "$H" -X POST localhost:7801/v1/runs -d '{"prompt":"x","workspace":"/tmp/akari-repo","permissionMode":"full"}'` | `full_permission_disabled` |
+
+worktree で実行して、HTTP で承認する:
+
+```sh
+R=$(curl -s -H "$H" -X POST localhost:7801/v1/runs \
+  -d '{"prompt":"read_file で README.md を読んで、タイポを誤字に直して","workspace":"/tmp/akari-repo","git":{"worktree":true},"labels":{"who":"muse"}}')
+echo "$R"; ID=$(echo "$R" | node -e 'process.stdin.on("data",d=>console.log(JSON.parse(d).runId))')
+curl -sN -H "$H" localhost:7801/v1/runs/$ID/events > /tmp/events.txt &    # 経過を裏で記録
+sleep 20; curl -s -H "$H" localhost:7801/v1/runs/$ID      # status と pendingApproval を見る
+```
+
+**期待**: `status` が `waiting-approval` になり、`pendingApproval` に `edit_file` と `callId`。
+（まだ `running` なら少し待って同じ GET をもう一度。モデルが道具を使わずに終われば `done`）
+
+```sh
+CALL=$(curl -s -H "$H" localhost:7801/v1/runs/$ID | node -e 'process.stdin.on("data",d=>console.log(JSON.parse(d).pendingApproval.callId))')
+curl -s -H "$H" -X POST localhost:7801/v1/runs/$ID/approvals/$CALL -d '{"decision":"allow"}'
+sleep 15
+curl -s -H "$H" localhost:7801/v1/runs/$ID | grep -o '"status":"[a-z-]*"'
+curl -s -H "$H" "localhost:7801/v1/runs/$ID/transcript?chunk=2000"
+curl -s -H "$H" localhost:7801/v1/runs/$ID/diff
+cat /tmp/akari-repo/README.md                              # 元のリポジトリは「タイポ」のまま
+cat "$AKARI_HOME/worktrees/$ID/README.md"                  # worktree の方が「誤字」
+git -C /tmp/akari-repo branch                               # akari/<ID> ができている
+grep -c '^id:' /tmp/events.txt                              # 経過の件数（連番つき）
+```
+
+**期待**: `status` は `done`。要約に目的・経過（`edit_file README.md → ✓ …`）・変更したファイル。
+元のリポジトリは変わらず、worktree だけが変わる。
+
+続きと再起動:
+
+```sh
+curl -s -H "$H" -X POST localhost:7801/v1/runs/$ID/messages -d '{"text":"何を直したか一言で"}'   # 201 で新しい runId
+kill $SERVE; sleep 2                                        # サーバを止める（serve の Ctrl+C と同じ）
+akari serve --port 7801 > /tmp/serve.out 2> /tmp/serve.err & SERVE=$!; sleep 2
+curl -s -H "$H" "localhost:7801/v1/runs?label.who=muse"    # 再起動しても2件とも見える
+kill $SERVE
+```
+
+**期待**: `/messages` は `"injected":false` と新しい `runId`（同じ `conversationId`）。
+再起動後も一覧に2件出る（トークンは変わらないので同じ `$H` で通る）。
+
+**報告してほしいこと**: 各期待どおりだったか。違ったら、そのコマンドの出力そのまま。
+特に、モデルが承認待ちになるまでの時間と、`transcript` が貼って読めるか。
+
 ---
 
 ## 12. 報告してほしいこと

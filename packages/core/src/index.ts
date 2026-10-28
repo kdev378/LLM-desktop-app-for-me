@@ -130,6 +130,8 @@ export {
   ChangeJournal,
   pruneBackups,
   sha256OfFile,
+  diffJournal,
+  type FileDiff,
   type FileChange,
   type ChangeOp,
   type UndoResult,

@@ -26,6 +26,9 @@ importers:
       '@akari/core':
         specifier: workspace:*
         version: link:../../packages/core
+      '@akari/server':
+        specifier: workspace:*
+        version: link:../server
       commander:
         specifier: ^12.1.0
         version: 12.1.0
@@ -42,6 +45,15 @@ importers:
       '@types/react':
         specifier: 19.2.2
         version: 19.2.2
+
+  apps/server:
+    dependencies:
+      '@akari/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      zod:
+        specifier: ^3.24.0
+        version: 3.25.76
 
   packages/core:
     dependencies:

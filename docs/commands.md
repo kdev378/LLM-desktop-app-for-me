@@ -71,6 +71,7 @@ akari run -m qwen3-4b "直して"     # 後ろ（同じ）
 | `models` | モデル一覧 | 触らない |
 | `doctor` | 接続先・設定・データの状態 | 触らない |
 | `config …` | 設定と接続先の操作 | 設定ファイルのみ |
+| `serve` | ハーネスAPI。外部のツールから HTTP で実行を頼めるようにする | **触る**（頼まれた実行が。承認は HTTP で返す） |
 
 ---
 
@@ -469,6 +470,10 @@ akari config set logging.level debug
 | `logging.level` | `error`/`warn`/`info`/`debug`/`trace` | `info` |
 | `logging.retainDays` | 1〜365 | `14` |
 | `concurrency.maxParallelRuns` | 1〜16 | `4` |
+| `agent.approvalTimeoutMs` | 1000〜86400000 または `null` | `null`（無期限） |
+| `server.port` | 1024〜65535 | `7801` |
+| `server.allowOrigins` | 文字列配列（JSON） | `[]`（ブラウザからは全拒否） |
+| `server.allowFullPermission` | `true` / `false` | `false`（HTTP から full で頼めない） |
 
 `deniedCommands` の既定（部分一致で拒否。**承認画面すら出ない**）:
 
@@ -581,6 +586,65 @@ akari config endpoints probe [名前|ID] [-m <モデル>] [--context <トーク�
 返さないサーバでは `--context` で手で設定する。
 
 ---
+
+## `akari serve` — ハーネスAPI
+
+同じ PC で動く別のプログラム（チャットボット、統合役のエージェントなど）から、HTTP で実行を頼めるようにする。
+仕様は `docs/spec/12-harness-api.md`。**この PC の中（127.0.0.1）からだけ**受け付ける。
+
+```sh
+akari serve                        # http://127.0.0.1:7801
+akari serve --port 7900
+akari serve --workspace ~/proj     # 実行ごとに workspace を書かなかったときの作業フォルダ
+akari serve --print-token          # トークンを標準出力へ出す（案内は標準エラー）
+```
+
+- トークンは `server.json`（下の「保存される場所」、権限600）に保存され、再起動しても変わらない
+- Ctrl+C で止める。走っている実行は中断する（変更の記録は残る）
+- 同じポートで別の `akari serve` が動いていれば、起動せずに終了コード2
+- **HTTP から `full` では頼めない**（既定）。許すなら `akari config set server.allowFullPermission true`。
+  コマンドがまだ作業フォルダに閉じ込められていないため（「`full` でも通らないもの」の下の注意）
+- 実行の記録は再起動しても API から取れる。走っている途中でサーバが落ちた実行は `interrupted` になる
+
+### 試す
+
+```sh
+# 別の端末で。macOS の場合（ほかの OS は下の「保存される場所」。AKARI_HOME を使っているならその中）
+TOKEN=$(node -e 'console.log(require(process.argv[1]).token)' "$HOME/Library/Application Support/Akari/server.json")
+H="Authorization: Bearer $TOKEN"
+curl -s -H "$H" -X POST localhost:7801/v1/runs \
+  -d '{"prompt":"README の誤字を直して","workspace":"/tmp/repo","git":{"worktree":true}}'
+curl -sN -H "$H" localhost:7801/v1/runs/<runId>/events         # 経過（SSE）。終わると閉じる
+curl -s  -H "$H" localhost:7801/v1/runs/<runId>                # 状態。承認待ちなら pendingApproval
+curl -s  -H "$H" -X POST localhost:7801/v1/runs/<runId>/approvals/<callId> -d '{"decision":"allow"}'
+curl -s  -H "$H" "localhost:7801/v1/runs/<runId>/transcript?chunk=2000"   # チャットに貼れる要約
+```
+
+### 口の一覧
+
+| 口 | 何をするか |
+|---|---|
+| `GET /v1/health` | 動いているか（トークン不要） |
+| `GET /v1/endpoints` / `GET /v1/models?endpoint=` | 接続先とモデル（鍵は返さない） |
+| `POST /v1/runs` | 実行を作る。`prompt` `workspace` `endpoint` `model` `permissionMode` `maxSteps` `tools` `conversationId` `labels` `git` `idempotencyKey` |
+| `GET /v1/runs?label.<名前>=<値>&status=&limit=` | 一覧（新しい順） |
+| `GET /v1/runs/{id}` | 状態 |
+| `GET /v1/runs/{id}/events` | 経過（SSE）。`Last-Event-ID` か `?from=<連番>` で続きから |
+| `POST /v1/runs/{id}/approvals/{callId}` | 承認に答える。`allow` / `allowSession` / `deny`（`feedback` 可）/ `abort` |
+| `POST /v1/runs/{id}/abort` | 中断 |
+| `POST /v1/runs/{id}/messages` | 追記。実行中なら次の手の前に入れる（202）。終わっていれば同じ会話の続きとして新しい実行（201） |
+| `GET /v1/runs/{id}/transcript?format=markdown\|text\|json&chunk=2000` | 要約。`chunk` でその字数以下に割る（コードブロックは壊さない） |
+| `GET /v1/runs/{id}/diff?path=` / `POST /v1/runs/{id}/undo` | 差分 / 取り消し |
+| `GET /v1/worktrees` / `DELETE /v1/runs/{id}/worktree` | worktree の一覧 / 削除（ブランチは消さない） |
+| `GET /v1/conversations` / `GET /v1/conversations/{id}` | 会話 |
+
+エラーは `{"error":{"code":"…","message":"…","detail":"…"}}`。外部ツールは `code` で分岐する
+（`unauthorized` `origin_not_allowed` `host_not_allowed` `workspace_required` `full_permission_disabled`
+`git_tools_disabled` `approval_not_pending` `run_finished` `branch_exists` `not_git_repo` など）。
+
+- `git.worktree: true` で、実行ごとに `akari/<実行ID>` のブランチと作業用フォルダ（保存される場所の `worktrees/`）を作る。
+  元のリポジトリには触らない。Akari は commit も merge もしない
+- 承認待ちのまま `agent.approvalTimeoutMs` を過ぎたら、拒否として扱う（既定は無期限）
 
 ## 文脈の圧縮（`digest` / `recall`）
 
@@ -774,6 +838,9 @@ conversations/       会話。<ID>.json（見出し）と <ID>.messages.jsonl（
 backups/<実行ID>/     変更前のバックアップと journal.json（undo の根拠）
 trash/conversations/ ゴミ箱へ移した会話（30日で消える）
 logs/                NDJSON のログ
+server.json          ハーネスAPIのトークンとポート。権限600
+server/runs/         ハーネスAPIの実行の記録（<ID>.json）とイベント（<ID>.events.ndjson。終わって1時間で消える）
+worktrees/<実行ID>/   ハーネスAPIが実行ごとに作った git worktree（DELETE するまで残る）
 ```
 
 **会話には、エージェントが読んだファイルの中身やコマンドの出力もそのまま入る。** 暗号化はしない（ファイルは本人だけが読める権限600で作る。Windows では効かない）。
@@ -791,7 +858,6 @@ Windows ではアクセス権を絞れておらず、起動のたびに警告が
 
 | コマンド | 内容 | 予定 |
 |---|---|---|
-| `serve` | ハーネスAPI（ローカルHTTP） | P3 |
 | `mcp` | MCPの登録と公開 | P4 |
 | `index` | ベクトル索引 | P5 |
 | `web` | Web検索と取得 | P6 |

@@ -59,8 +59,9 @@ program
   akari diff                          直前の実行が何を変えたか
   akari undo                          直前の実行を元に戻す
   echo "要約して" | akari chat         標準入力から
+  akari serve                         ハーネスAPI（外部のツールから HTTP で頼む）
 
-まだ実装されていないもの: serve / mcp / index / web（docs/spec/11-roadmap.md の P3〜P6）
+まだ実装されていないもの: mcp / index / web（docs/spec/11-roadmap.md の P4〜P6）
 `,
   );
 
@@ -114,6 +115,21 @@ program
       }
       const { interactiveCommand } = await import('./tui/index.js');
       await interactiveCommand({ ...g, ...o, noTools: o.tools === false });
+    }),
+  );
+
+program
+  .command('serve')
+  .description(
+    'ハーネスAPI。外部のツールから HTTP で実行を頼めるようにする（この PC の中からだけ）',
+  )
+  .option('--port <n>', '待ち受けるポート。既定は設定の server.port（7801）')
+  .option('--workspace <dir>', '実行ごとに指定が無いときの作業フォルダ')
+  .option('--print-token', 'トークンを標準出力へ出す')
+  .action(async (o) =>
+    run(async () => {
+      const { serveCommand } = await import('./commands/serve.js');
+      await serveCommand({ ...globals(), ...o });
     }),
   );
 
@@ -257,7 +273,6 @@ program
 
 // まだ無い機能。あるように見せない。
 for (const [name, desc, when] of [
-  ['serve', 'ハーネスAPI', 'P3'],
   ['mcp', 'MCP の登録と公開', 'P4'],
   ['index', 'ベクトル索引', 'P5'],
   ['web', 'Web検索と取得', 'P6'],
@@ -402,6 +417,9 @@ for (const stream of [process.stdout, process.stderr]) {
 }
 
 process.on('SIGINT', () => {
+  // コマンドが自分で受けている（run の中断、serve の停止）なら、そちらに任せる。
+  // ここで先に終わらせると、実行を止める・記録を閉じるといった後始末が走らない
+  if (process.listenerCount('SIGINT') > 1) return;
   process.stderr.write('\n中断しました。\n');
   process.exit(EXIT.interrupted);
 });

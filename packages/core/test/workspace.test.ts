@@ -162,6 +162,31 @@ test('Akari のデータディレクトリの中は作業フォルダにでき�
   await assert.rejects(() => Workspace.open(inner, akari), /Akari のデータ/);
 });
 
+test('実行ごとの worktree（データ/worktrees/<実行ID>）だけは作業フォルダにでき、その外のデータは触れない', async () => {
+  // ハーネスAPIの作業の隔離（12-harness-api.md）。worktree はデータの中に置く
+  const { akari } = await sandbox();
+  const wt = path.join(akari, 'worktrees', '01JTESTTESTTESTTESTTESTTES');
+  await fs.mkdir(wt, { recursive: true });
+  await fs.writeFile(path.join(wt, 'a.txt'), 'x\n');
+  await fs.writeFile(path.join(akari, 'config.json'), '{}');
+  const ws = await Workspace.open(wt, akari);
+  assert.equal((await ws.resolve('a.txt', 'write')).ok, true);
+  const up = await ws.resolve('../../config.json', 'read');
+  assert.equal(up.ok, false, 'worktree の外（設定）へは出られない');
+
+  // worktrees 自体や、その中の深い場所、名前が実行IDでないものは不可
+  await assert.rejects(
+    () => Workspace.open(path.join(akari, 'worktrees'), akari),
+    /Akari のデータ/,
+  );
+  const deep = path.join(wt, 'sub');
+  await fs.mkdir(deep);
+  await assert.rejects(() => Workspace.open(deep, akari), /Akari のデータ/);
+  const odd = path.join(akari, 'worktrees', 'conversations');
+  await fs.mkdir(odd);
+  await assert.rejects(() => Workspace.open(odd, akari), /Akari のデータ/);
+});
+
 test('存在しないフォルダは開けない', async () => {
   const { base } = await sandbox();
   await assert.rejects(() => Workspace.open(path.join(base, 'nope')), /ありません/);

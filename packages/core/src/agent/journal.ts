@@ -3,6 +3,7 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { paths, ensureDir } from '../util/paths.js';
 import { writeJsonAtomic, readJson } from '../util/json.js';
+import { formatUnifiedDiff } from '../util/diff.js';
 
 /**
  * 変更記録。ファイルを変える「前」に必ず通す。
@@ -278,4 +279,37 @@ export async function pruneBackups(
     removed.push(s.id);
   }
   return removed;
+}
+
+export type FileDiff = { path: string; diff: string; note?: string };
+
+/**
+ * 実行が変えた各ファイルについて、「最初のバックアップ」と「現在の中身」を比べる。
+ * akari diff・対話画面の /diff・ハーネスAPI の diff で共有する。
+ */
+export async function diffJournal(journal: ChangeJournal, onlyPath?: string): Promise<FileDiff[]> {
+  const byPath = new Map<string, FileChange[]>();
+  for (const ch of journal.changes) {
+    const list = byPath.get(ch.path);
+    if (list) list.push(ch);
+    else byPath.set(ch.path, [ch]);
+  }
+  const results: FileDiff[] = [];
+  for (const [relative, list] of byPath) {
+    if (onlyPath && relative !== onlyPath) continue;
+    const first = list[0]!;
+    const before = first.backupPath
+      ? await fs.readFile(path.join(journal.dir, first.backupPath), 'utf8').catch(() => '')
+      : '';
+    const after = await fs.readFile(path.join(journal.workspace, relative), 'utf8').catch(() => '');
+    const text = formatUnifiedDiff(relative, before, after);
+    results.push({
+      path: relative,
+      diff: text,
+      ...(text === ''
+        ? { note: '実行前と同じ内容です（取り消し済みか、元に戻されています）' }
+        : {}),
+    });
+  }
+  return results;
 }

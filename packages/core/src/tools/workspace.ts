@@ -80,8 +80,9 @@ export class Workspace {
         throw new Error(`${why}を作業フォルダにはできません: ${requested}`);
       }
     }
-    // Akari のデータディレクトリの中も不可
-    if (isInside(akariReal, real)) {
+    // Akari のデータディレクトリの中も不可。ただし、実行ごとの git worktree
+    // （<データ>/worktrees/<実行ID>、12-harness-api.md「作業の隔離」）だけは作業フォルダにできる
+    if (isInside(akariReal, real) && !isRunWorktree(akariReal, real)) {
       throw new Error(`Akari のデータの中を作業フォルダにはできません: ${requested}`);
     }
     return new Workspace(real, akariReal);
@@ -119,8 +120,12 @@ export class Workspace {
       };
     }
 
-    // Akari 自身のデータは、作業フォルダの中に置かれていても触らせない
-    if (isInsideOrSame(this.akariRoot, resolved.real)) {
+    // Akari 自身のデータは、作業フォルダの中に置かれていても触らせない。
+    // 作業フォルダそのものが worktree（データの中）なら、外へ出ないことは上で確かめてある
+    if (
+      isInsideOrSame(this.akariRoot, resolved.real) &&
+      !isRunWorktree(this.akariRoot, this.root)
+    ) {
       return {
         ok: false,
         reason: 'denied',
@@ -232,6 +237,12 @@ export function isInsideOrSame(parent: string, child: string): boolean {
 }
 
 /** 作業フォルダにしてはいけない場所。範囲が広すぎて取り消しが現実的でない。 */
+/** <データ>/worktrees/<実行ID> そのものか。worktrees 自体や、その中の深い場所は含めない。 */
+function isRunWorktree(akariRoot: string, dir: string): boolean {
+  const rel = path.relative(path.join(akariRoot, 'worktrees'), dir);
+  return /^[0-9A-Z]{26}$/.test(rel);
+}
+
 async function forbiddenRoots(akariReal: string): Promise<Array<[string, string]>> {
   const home = os.homedir();
   const list: Array<[string, string]> = [

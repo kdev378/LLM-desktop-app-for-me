@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import readlinePromises from 'node:readline/promises';
-import { ChangeJournal, formatUnifiedDiff, type FileChange } from '@akari/core';
+import { ChangeJournal, diffJournal } from '@akari/core';
 import { createContext, type GlobalOptions } from '../context.js';
 import { c, out, table, isInteractive } from '../term.js';
 import { ExitError, EXIT } from '../exit.js';
@@ -69,40 +69,8 @@ export async function runsCommand(opts: GlobalOptions & { limit?: string }): Pro
   out(c.dim('\n差分: akari diff --run <ID>   取り消し: akari undo --run <ID>'));
 }
 
-export type FileDiff = { path: string; diff: string; note?: string };
-
-/**
- * 実行が変えた各ファイルについて、「最初のバックアップ」と「現在の中身」を比べる。
- * akari diff と対話画面の /diff で共有する。
- */
-export async function collectDiffs(journal: ChangeJournal, onlyPath?: string): Promise<FileDiff[]> {
-  // 各ファイルについて「最初のバックアップ」と「現在の中身」を比べる
-  const byPath = new Map<string, FileChange[]>();
-  for (const ch of journal.changes) {
-    const list = byPath.get(ch.path);
-    if (list) list.push(ch);
-    else byPath.set(ch.path, [ch]);
-  }
-
-  const results: Array<{ path: string; diff: string; note?: string }> = [];
-  for (const [relative, list] of byPath) {
-    if (onlyPath && relative !== onlyPath) continue;
-    const first = list[0]!;
-    const before = first.backupPath
-      ? await fs.readFile(path.join(journal.dir, first.backupPath), 'utf8').catch(() => '')
-      : '';
-    const after = await fs.readFile(path.join(journal.workspace, relative), 'utf8').catch(() => '');
-    const text = formatUnifiedDiff(relative, before, after);
-    results.push({
-      path: relative,
-      diff: text,
-      ...(text === ''
-        ? { note: '実行前と同じ内容です（取り消し済みか、元に戻されています）' }
-        : {}),
-    });
-  }
-  return results;
-}
+/** akari diff と対話画面の /diff で使う。中身は core の diffJournal。 */
+export const collectDiffs = diffJournal;
 
 export async function diffCommand(opts: RunRefOptions): Promise<void> {
   const ctx = await createContext(opts);

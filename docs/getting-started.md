@@ -249,8 +249,9 @@ akari run --tools-mode both "直して"       # 両方（判定を待たない�
 | `conversations` | 保存した会話の一覧・表示・削除 |
 | `digest` / `recall` | 文脈の圧縮版を見る・圧縮した生の記録を探す |
 | `doctor` | 状態の確認。`--export` で診断の書き出し |
+| `serve` | ハーネスAPI。外部のツールから HTTP で頼めるようにする（この PC の中からだけ） |
 
-`serve`（ハーネスAPI）/ `mcp` / `index` / `web` は未実装。
+`mcp` / `index` / `web` は未実装。
 実行すると「まだ実装されていません」と出る。
 
 ## 保存される場所

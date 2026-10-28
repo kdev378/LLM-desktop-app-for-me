@@ -13,6 +13,7 @@
   },
   "dependencies": {
     "@akari/core": "workspace:*",
+    "@akari/server": "workspace:*",
     "commander": "^12.1.0",
     "ink": "7.1.1",
     "react": "19.2.0",

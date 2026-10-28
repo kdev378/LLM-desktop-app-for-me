@@ -208,7 +208,7 @@ test('到達できない接続先は終了コード4', async () => {
 });
 
 test('未実装のコマンドは、あるように見せず終了コード2', async () => {
-  for (const name of ['serve', 'mcp', 'index', 'web']) {
+  for (const name of ['mcp', 'index', 'web']) {
     const r = await akari([name]);
     assert.equal(r.code, 2, `${name} は未実装として終了コード2`);
     assert.match(r.stderr, /まだ実装されていません/);
