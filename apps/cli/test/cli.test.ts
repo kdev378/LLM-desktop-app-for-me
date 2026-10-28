@@ -618,6 +618,23 @@ test('知らないオプションは終了コード2（使い方の誤り）', a
   assert.match(r.stderr, /unknown option/);
 });
 
+test('引数なしは、端末でなければ今までどおりヘルプ。オプションだけなら対話画面を断る', async () => {
+  // 対話画面（docs/spec/17-interactive.md）は端末でしか出さない。パイプの中で待ち続けない
+  const help = await akari([]);
+  assert.equal(help.code, 0);
+  assert.match(help.stdout, /Akari CLI/);
+  const cont = await akari(['-c']);
+  assert.equal(cont.code, 2);
+  assert.match(cont.stderr, /対話できる端末ではありません/);
+  const json = await akari(['--json']);
+  assert.equal(json.code, 2);
+  assert.match(json.stderr, /--json/);
+  // 値を取るオプションの値を、プロンプトと取り違えない
+  const withModel = await akari(['-m', 'some-model']);
+  assert.equal(withModel.code, 2);
+  assert.match(withModel.stderr, /対話できる端末ではありません/);
+});
+
 test('--help と --version は終了コード0', async () => {
   assert.equal((await akari(['--help'])).code, 0);
   assert.equal((await akari(['--version'])).code, 0);

@@ -162,6 +162,8 @@ export type SessionReconfig = {
   reasoning?: ReasoningLevel | null;
   /** モデルを変えたときの、そのモデルの文脈長。 */
   windowTokens?: number | null;
+  /** 記録係。モデルを変えたら、記録に残すモデル名も変わるので差し替える。 */
+  recorder?: ConversationRecorder;
 };
 
 /** 文脈の量。最後に送ったリクエストのもの。 */
@@ -260,6 +262,11 @@ export class Session {
     return this.tools.map((t) => t.name);
   }
 
+  /** いちばん新しい圧縮。まだ無ければ null。保存しない会話でも見られるように持っておく。 */
+  get latestCompaction(): Compaction | null {
+    return this.compaction;
+  }
+
   /** 最後に送ったリクエストの文脈の量。まだ送っていなければ null。 */
   get contextUsage(): ContextUsage | null {
     return this.lastUsage;
@@ -286,6 +293,7 @@ export class Session {
       if (patch.reasoning === null) delete this.opts.reasoning;
       else this.opts.reasoning = patch.reasoning;
     }
+    if (patch.recorder !== undefined) this.opts.recorder = patch.recorder;
     if (patch.windowTokens !== undefined && this.opts.context) {
       this.opts.context = { ...this.opts.context, windowTokens: patch.windowTokens };
     }
@@ -335,6 +343,8 @@ export class Session {
 
   private async *runLoop(input: string): AsyncGenerator<RunEvent, void, void> {
     this.refusedInRun = false;
+    // 「この実行中は許可」は文字どおりこの実行だけ。続けて送る使い方（対話画面）で持ち越さない
+    this.sessionAllows.clear();
     const journal = await ChangeJournal.create(this.runId, this.workspace.root, this.opts.root);
     this.journal = journal;
 

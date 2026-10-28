@@ -69,10 +69,13 @@ export async function runsCommand(opts: GlobalOptions & { limit?: string }): Pro
   out(c.dim('\n差分: akari diff --run <ID>   取り消し: akari undo --run <ID>'));
 }
 
-export async function diffCommand(opts: RunRefOptions): Promise<void> {
-  const ctx = await createContext(opts);
-  const journal = await pickJournal(ctx.root, opts.run);
+export type FileDiff = { path: string; diff: string; note?: string };
 
+/**
+ * 実行が変えた各ファイルについて、「最初のバックアップ」と「現在の中身」を比べる。
+ * akari diff と対話画面の /diff で共有する。
+ */
+export async function collectDiffs(journal: ChangeJournal, onlyPath?: string): Promise<FileDiff[]> {
   // 各ファイルについて「最初のバックアップ」と「現在の中身」を比べる
   const byPath = new Map<string, FileChange[]>();
   for (const ch of journal.changes) {
@@ -83,7 +86,7 @@ export async function diffCommand(opts: RunRefOptions): Promise<void> {
 
   const results: Array<{ path: string; diff: string; note?: string }> = [];
   for (const [relative, list] of byPath) {
-    if (opts.path && relative !== opts.path) continue;
+    if (onlyPath && relative !== onlyPath) continue;
     const first = list[0]!;
     const before = first.backupPath
       ? await fs.readFile(path.join(journal.dir, first.backupPath), 'utf8').catch(() => '')
@@ -98,6 +101,14 @@ export async function diffCommand(opts: RunRefOptions): Promise<void> {
         : {}),
     });
   }
+  return results;
+}
+
+export async function diffCommand(opts: RunRefOptions): Promise<void> {
+  const ctx = await createContext(opts);
+  const journal = await pickJournal(ctx.root, opts.run);
+
+  const results = await collectDiffs(journal, opts.path);
 
   if (ctx.json) {
     out(JSON.stringify({ runId: journal.runId, workspace: journal.workspace, files: results }));

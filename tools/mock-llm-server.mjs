@@ -230,22 +230,26 @@ const server = http.createServer((req, res) => {
     }
     let i = 0;
     const tokens = [...reply];
-    const timer = setInterval(() => {
-      const piece = tokens.slice(i, i + 3).join('');
-      i += 3;
-      if (piece) send({ content: piece });
-      if (i >= tokens.length) {
-        clearInterval(timer);
-        send({}, 'stop');
-        if (payload.stream_options?.include_usage) {
-          res.write(
-            `data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 42, completion_tokens: tokens.length, total_tokens: 42 + tokens.length } })}\n\n`,
-          );
+    const timer = setInterval(
+      () => {
+        const piece = tokens.slice(i, i + 3).join('');
+        i += 3;
+        if (piece) send({ content: piece });
+        if (i >= tokens.length) {
+          clearInterval(timer);
+          send({}, 'stop');
+          if (payload.stream_options?.include_usage) {
+            res.write(
+              `data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 42, completion_tokens: tokens.length, total_tokens: 42 + tokens.length } })}\n\n`,
+            );
+          }
+          res.write('data: [DONE]\n\n');
+          res.end();
         }
-        res.write('data: [DONE]\n\n');
-        res.end();
-      }
-    }, 15);
+        // AKARI_MOCK_INTERVAL（ミリ秒）で流す速さを変えられる。生成中に止める操作を試すため
+      },
+      Number(process.env.AKARI_MOCK_INTERVAL ?? 15),
+    );
     // res の close を見る。req の 'close' は本文を読み終えた時点で発火するため、
     // ここで使うと送信前に止まってしまう。
     res.on('close', () => clearInterval(timer));

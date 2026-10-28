@@ -26,6 +26,7 @@ import {
   conversationsRmCommand,
 } from './commands/conversations.js';
 import { digestCommand, recallCommand } from './commands/context.js';
+import { isInteractive } from './term.js';
 
 /**
  * akari CLI。仕様: docs/spec/10-cli.md
@@ -81,6 +82,39 @@ program
   .option('--no-save', 'この実行のやり取りを保存しない')
   .action(async (args: string[] | undefined, o) =>
     run(() => runCommand(args ?? [], { ...globals(), ...o, noTools: o.tools === false })),
+  );
+
+// 引数なしの akari で入る対話画面（docs/spec/17-interactive.md）。名前で呼ぶものではないので隠す
+program
+  .command('interactive', { hidden: true })
+  .description('対話画面')
+  .option('-C, --cwd <dir>', '作業フォルダ。既定はカレント')
+  .option('--permission <mode>', 'ask / auto-edit / full')
+  .option('-y, --yes', '--permission auto-edit と同じ')
+  .option('--max-steps <n>', 'ステップ上限')
+  .option('--no-tools', 'ツールを渡さない')
+  .option('--read-only', '読み取り系のツールだけを渡す')
+  .option('--tools-mode <mode>', 'auto / native / prompted / both')
+  .option('--timeout <秒>', '最初の応答までの待ち上限')
+  .option('--think <量>', 'auto / off / low / medium / high')
+  .option('-c, --continue', 'この作業フォルダの直近の会話の続きから')
+  .option('--conversation <ID>', '指定した会話の続きから（前方一致でよい）')
+  .option('--no-save', 'やり取りを保存しない')
+  .action(async (o) =>
+    run(async () => {
+      const g = globals();
+      if (g.json)
+        throw new ExitError(EXIT.usage, '対話画面では --json を使えません。', {
+          hint: 'akari run --json "…" を使ってください。',
+        });
+      if (!isInteractive()) {
+        throw new ExitError(EXIT.usage, '対話できる端末ではありません。', {
+          hint: 'akari run "…" のように渡すか、標準入力からパイプしてください。',
+        });
+      }
+      const { interactiveCommand } = await import('./tui/index.js');
+      await interactiveCommand({ ...g, ...o, noTools: o.tools === false });
+    }),
   );
 
 program
@@ -292,11 +326,36 @@ async function run(fn: () => Promise<void>): Promise<void> {
   }
 }
 
+/** 全体のオプションのうち、値を取るもの。値をプロンプトと取り違えないため。 */
+const VALUE_OPTIONS = new Set([
+  '-e',
+  '--endpoint',
+  '-m',
+  '--model',
+  '-C',
+  '--cwd',
+  '--permission',
+  '--max-steps',
+  '--tools-mode',
+  '--timeout',
+  '--think',
+  '--conversation',
+]);
+
+function hasPositional(args: string[]): boolean {
+  for (let i = 0; i < args.length; i++) {
+    const a = args[i]!;
+    if (a === '--') return i + 1 < args.length;
+    if (!a.startsWith('-')) return true;
+    if (VALUE_OPTIONS.has(a)) i += 1;
+  }
+  return false;
+}
+
 async function main(): Promise<void> {
   let argv = process.argv;
   if (argv.includes('--no-color') || process.env.NO_COLOR) setColor(false);
 
-  // 引数なしは、まだ何ができるかを示す。エージェント実行があるように見せない。
   // サブコマンド名でない文字列が最初に来たら run とみなす（akari "テストを通して"）。
   const known = new Set(program.commands.map((cmd) => cmd.name()));
   const first = argv[2];
@@ -304,11 +363,19 @@ async function main(): Promise<void> {
     argv = [...argv.slice(0, 2), 'run', ...argv.slice(2)];
   }
 
-  if (argv.length <= 2) {
-    out(c.bold(`Akari CLI ${VERSION}`));
-    out('');
-    program.outputHelp();
-    return;
+  // サブコマンドもプロンプトも無ければ対話画面（17-interactive.md）。
+  // 端末でなければ（パイプの中など）、今までどおりヘルプを出す
+  if (!hasPositional(argv.slice(2))) {
+    const flags = argv.slice(2);
+    const onlyInfo = flags.some((a) => ['-h', '--help', '-v', '--version'].includes(a));
+    if (!onlyInfo && (isInteractive() || flags.length > 0)) {
+      argv = [...argv.slice(0, 2), 'interactive', ...flags];
+    } else if (flags.length === 0) {
+      out(c.bold(`Akari CLI ${VERSION}`));
+      out('');
+      program.outputHelp();
+      return;
+    }
   }
 
   // commander に process.exit させない。終了コードは仕様（docs/spec/10-cli.md）で決めている。
