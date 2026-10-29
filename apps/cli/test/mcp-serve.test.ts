@@ -158,3 +158,45 @@ test('mcp serve --http はまだ無いと言って断る', async () => {
   const r = await akari(['mcp', 'serve', '--http'], home);
   assert.equal(r.code, 2);
 });
+
+test('索引があれば memory_search も読み取りの道具として出す', async () => {
+  const { work, home } = await setup();
+  await fs.writeFile(
+    path.join(work, 'auth.ts'),
+    '// ログインと認証の処理\nexport function login() {}\n',
+  );
+  const MOCK = path.join(here, '..', '..', '..', 'tools', 'mock-llm-server.mjs');
+  const port = 11000 + Math.floor(Math.random() * 500);
+  const mock = spawn(process.execPath, [MOCK, String(port)], { stdio: 'ignore' });
+  try {
+    for (let i = 0; i < 50; i++) {
+      const ok = await fetch(`http://127.0.0.1:${port}/v1/models`)
+        .then((r) => r.ok)
+        .catch(() => false);
+      if (ok) break;
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    await akari(
+      ['config', 'endpoints', 'add', '--name', 'mock', '--url', `http://127.0.0.1:${port}/v1`],
+      home,
+    );
+    await akari(['config', 'set', 'memory.embedding.source', 'endpoint'], home);
+    await akari(['config', 'set', 'memory.embedding.model', 'mock-embed'], home);
+    assert.equal((await akari(['index', 'build', '-C', work], home)).code, 0);
+
+    const { hub, call, names } = await connect(work, home);
+    try {
+      assert.ok(names.includes('memory_search'));
+      const tool = hub.tools.find((t) => t.name === 'mcp__akari__memory_search')!;
+      assert.equal(tool.risk, 'read');
+      const r = await call('memory_search', { query: '認証の処理' });
+      assert.equal(r.ok, true);
+      assert.match(r.content, /^1\. auth\.ts:1-2/);
+      assert.doesNotMatch(r.content, /TOKEN=secret/);
+    } finally {
+      await hub.close();
+    }
+  } finally {
+    mock.kill();
+  }
+});

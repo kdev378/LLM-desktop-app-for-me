@@ -6,7 +6,9 @@ import {
   diffJournal,
   findDeleteCommand,
   matchesDenied,
+  prepareMemory,
   ulid,
+  type MemoryNotice,
   type Config,
   type Logger,
   type SandboxStatus,
@@ -50,6 +52,8 @@ export type McpServeHandle = {
   /** 出した道具の名前。 */
   tools: string[];
   sandbox: SandboxStatus | null;
+  /** 索引（memory_search）の知らせ。標準エラーへ出す。 */
+  notices: MemoryNotice[];
   /** 相手が切ったら解決する。 */
   closed: Promise<void>;
   close: () => Promise<void>;
@@ -103,11 +107,21 @@ export async function serveMcp(opts: McpServeOptions): Promise<McpServeHandle> {
     },
   );
 
+  // 索引があれば memory_search も出す（読み取りだけ。14-memory.md）。接続の始めに一度だけ確かめる
+  const memory = await prepareMemory({
+    dataRoot: opts.root,
+    indexRoot: workspace.root,
+    config,
+    autoUpdate: true,
+    logger,
+  });
   const names = exposedToolNames(opts.permission);
   const exposed: string[] = [];
-  for (const name of names) {
-    const tool = BUILTIN_TOOLS.find((t) => t.name === name);
-    if (!tool) continue;
+  const tools = [
+    ...names.map((n) => BUILTIN_TOOLS.find((t) => t.name === n)).filter((t): t is ToolSpec => !!t),
+    ...(memory.tool ? [memory.tool] : []),
+  ];
+  for (const tool of tools) {
     server.registerTool(
       tool.name,
       {
@@ -241,6 +255,7 @@ export async function serveMcp(opts: McpServeOptions): Promise<McpServeHandle> {
   return {
     tools: exposed,
     sandbox,
+    notices: memory.notices,
     closed,
     close: async () => {
       await server.close();

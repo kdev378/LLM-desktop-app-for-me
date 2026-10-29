@@ -12,6 +12,7 @@ import {
   type ResolvedEndpoint,
   type McpHub,
   type RunEvent,
+  type ToolSpec,
   type ToolsMode,
 } from '@akari/core';
 import type { CliContext } from '../context.js';
@@ -20,6 +21,7 @@ import { chooseConversation, safeSaver, type ConversationChoice } from '../conve
 import {
   decideToolsMode,
   mcpToolsFor,
+  prepareCliMemory,
   parsePermission,
   toolNamesFor,
   windowTokensFor,
@@ -156,6 +158,8 @@ export class Controller {
   private lastRun: { runId: string; changedFiles: string[] } | null = null;
   private instructionsShown = false;
   private shownNotices = new Set<string>();
+  /** 作業フォルダの索引の道具。送るたびに確かめ直す（14-memory.md「更新」）。 */
+  private memoryTool: ToolSpec | null = null;
   private lastSandbox: string | null = null;
 
   private nextId = 1;
@@ -401,7 +405,7 @@ export class Controller {
         : {}),
       permissionMode: setup.permission,
       toolNames: toolNamesFor(setup.scope),
-      extraTools: mcpToolsFor(setup.mcp.tools, setup.scope),
+      extraTools: this.extraTools(setup.scope),
       maxSteps: setup.maxSteps,
       toolsMode: setup.toolsMode,
       sandbox: this.ctx.config.agent.sandbox,
@@ -415,10 +419,46 @@ export class Controller {
     });
   }
 
+  /** 標準の外の道具（MCP と索引）。 */
+  private extraTools(scope: ToolScope): ToolSpec[] {
+    const setup = this.setup as AgentSetup;
+    return [
+      ...mcpToolsFor(setup.mcp.tools, scope),
+      ...(this.memoryTool && scope !== 'off' ? [this.memoryTool] : []),
+    ];
+  }
+
+  /** 送る前に、索引を確かめる（変わったファイルだけ更新）。失敗しても送るのは止めない。 */
+  private async refreshMemory(): Promise<void> {
+    const setup = this.setup as AgentSetup;
+    if (setup.scope === 'off') return;
+    this.update({ busy: { label: '索引を確かめています', since: Date.now() } });
+    try {
+      const m = await prepareCliMemory(this.ctx, setup.scope, setup.workspace.root);
+      for (const n of m.notices) {
+        if (this.shownNotices.has(n.message)) continue;
+        this.shownNotices.add(n.message);
+        this.pushLines([
+          n.level === 'warn'
+            ? [seg('! ', 'warn'), seg(n.message, 'warn')]
+            : line(`  ${n.message}`, 'dim'),
+        ]);
+      }
+      this.memoryTool = m.tool;
+    } catch (err) {
+      this.memoryTool = null;
+      this.pushLines([
+        [seg('! ', 'warn'), seg(`索引を使えませんでした: ${(err as Error).message}`, 'warn')],
+      ]);
+    }
+    this.session!.reconfigure({ extraTools: this.extraTools(setup.scope) });
+  }
+
   private async runAgent(text: string): Promise<void> {
     const session = this.session!;
     const setup = this.setup as AgentSetup;
     this.pushItem({ kind: 'user', text });
+    await this.refreshMemory();
     const started = Date.now();
     this.update({ busy: { label: '待機中', since: started }, streaming: '', toolTail: [] });
     const filter = setup.toolsMode === 'prompted' ? createBlockFilter() : null;
@@ -793,7 +833,9 @@ export class Controller {
     if (this.setup.kind !== 'agent') return 'なし';
     const n = toolNamesFor(this.setup.scope).length;
     const m = mcpToolsFor(this.setup.mcp.tools, this.setup.scope).length;
-    const tail = m > 0 ? ` + MCP ${m}種` : '';
+    const tail =
+      (m > 0 ? ` + MCP ${m}種` : '') +
+      (this.memoryTool && this.setup.scope !== 'off' ? ' + 索引' : '');
     return this.setup.scope === 'off'
       ? 'なし'
       : this.setup.scope === 'read-only'
@@ -1051,7 +1093,7 @@ export class Controller {
     setup.scope = arg;
     this.session!.reconfigure({
       toolNames: names,
-      extraTools: mcpToolsFor(setup.mcp.tools, arg),
+      extraTools: this.extraTools(arg),
       toolsMode: setup.toolsMode,
     });
     this.update({ status: this.computeStatus() });

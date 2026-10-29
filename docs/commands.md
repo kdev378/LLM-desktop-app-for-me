@@ -73,6 +73,7 @@ akari run -m qwen3-4b "直して"     # 後ろ（同じ）
 | `config …` | 設定と接続先の操作 | 設定ファイルのみ |
 | `serve` | ハーネスAPI。外部のツールから HTTP で実行を頼めるようにする | **触る**（頼まれた実行が。承認は HTTP で返す） |
 | `mcp …` | 外部の MCP サーバの登録（その道具を Akari に使わせる） | 設定ファイルのみ（登録したサーバが何をするかは別） |
+| `index …` | 作業フォルダの索引（意味の近さで探す記憶）を作る・探す | 触らない（索引は Akari のデータの置き場に作る） |
 | `mcp serve` | Akari の道具を MCP で出す（Claude Code などから使う） | 既定は触らない。`--permission auto-edit` 以上で**触る**（記録あり・取り消せる） |
 
 ---
@@ -674,6 +675,35 @@ curl -s  -H "$H" "localhost:7801/v1/runs/<runId>/transcript?chunk=2000"   # チ�
   元のリポジトリには触らない。Akari は commit も merge もしない
 - 承認待ちのまま `agent.approvalTimeoutMs` を過ぎたら、拒否として扱う（既定は無期限）
 
+## `akari index` — 作業フォルダの索引（記憶）
+
+「どこに書いてあるか分からない」ものを、言葉の意味の近さで探せるようにする。仕様は `docs/spec/14-memory.md`。
+主役は今までどおり `grep` / `glob` で、索引は見つからないときの補助。返るのは候補（ファイル名・行番号・点数）で、
+モデルは `read_file` で中身を確かめてから使う。
+
+今は**外部の接続先の埋め込みモデル**を使う（LM Studio / Ollama などで、埋め込み用のモデルを動かす）。
+Akari が自分で動かす内蔵のモデルは準備中。
+
+```sh
+akari config set memory.embedding.source endpoint
+akari config set memory.embedding.model <埋め込み用モデル>   # 分からなければ、未指定のまま build すると候補が出る
+akari index build              # 作る（作り直す）。進み具合が出る。Ctrl+C で止めても前の索引は残る
+akari index search "認証はどこ" -k 5 [--path src]
+akari index status             # 件数・モデル・最終更新・索引の後で変わったファイル・今の設定で使えるか
+akari index update             # 変わったファイルだけ
+akari index rm                 # 索引を消す（作業フォルダのファイルには触らない）
+```
+
+- `-C <dir>` で作業フォルダを指定できる（既定はカレント）
+- git のリポジトリなら、git が無視しているファイルは入れない。git でなければ `node_modules` などを除いて歩く。
+  さらに外したいものは作業フォルダの `.akariignore`（1行1パターン）に書く
+- **秘密のファイル（`.env` など）は入れない**。1MB を超えるファイル、バイナリ、`*.min.js`・ロックファイルも入れない
+- 索引があれば、`akari run`・対話画面・ハーネスAPI・`mcp serve` でモデルに `memory_search` が渡る。
+  **実行の最初に、変わったファイルだけ自動で更新する**（50件を超えたら更新せずに `akari index update` を促す）
+- 埋め込みのモデルを変えたら、`akari index build` で作り直す。違うモデルの索引は混ぜずに使わない（そう表示される）
+- 埋め込みの接続先がインターネット上にあるときは、作る前に「ファイル何件・何MBが送られるか」を見せて確かめる（パイプの中は `-y`）
+- 索引は Akari のデータの置き場の `index/` にある。消えても作り直せる
+
 ## `akari mcp` — 外部の道具（MCP サーバ）を使う
 
 MCP は、モデルに道具を渡すための共通の口。ファイル検索・ブラウザ・社内ツールなど、
@@ -769,7 +799,7 @@ OpenCode に登録する例（プロジェクトの `opencode.json`。`~` は展
 
 | 権限 | 出す道具 |
 |---|---|
-| `read-only`（既定） | `read_file` `list_dir` `glob` `grep` `akari_changes` |
+| `read-only`（既定） | `read_file` `list_dir` `glob` `grep` `akari_changes`（索引があれば `memory_search` も） |
 | `auto-edit` | 上に加えて `write_file` `edit_file` `akari_undo_last` |
 | `full` | 上に加えて `run_command`（Akari の閉じ込めが効く） |
 
@@ -992,7 +1022,6 @@ Windows ではアクセス権を絞れておらず、起動のたびに警告が
 
 | コマンド | 内容 | 予定 |
 |---|---|---|
-| `index` | ベクトル索引 | P5 |
 | `web` | Web検索と取得 | P6 |
 
 コマンド以外で未実装のもの:

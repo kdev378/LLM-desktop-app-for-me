@@ -45,6 +45,23 @@ function turnIndex(payload) {
   return messages.filter((m) => m && m.role === 'assistant').length;
 }
 
+let embedCalls = 0;
+
+function mockEmbed(text, dims) {
+  const v = new Array(dims).fill(0);
+  const add = (token) => {
+    let h = 2166136261;
+    for (const ch of token) h = Math.imul(h ^ ch.codePointAt(0), 16777619) >>> 0;
+    v[h % dims] += 1;
+  };
+  const body = text.replace(/^\/\/ .*\n/, ''); // 先頭のファイル名の行は、重みを下げるため外す
+  for (const w of body.toLowerCase().match(/[a-z0-9_]{2,}/g) ?? []) add(`w:${w}`);
+  const cjk = [...body].filter((c) => /[\u3040-\u30ff\u3400-\u9fff]/.test(c));
+  for (let i = 0; i + 1 < cjk.length; i++) add(`b:${cjk[i]}${cjk[i + 1]}`);
+  if (v.every((x) => x === 0)) v[0] = 1;
+  return v;
+}
+
 const server = http.createServer((req, res) => {
   const body = [];
   req.on('data', (c) => body.push(c));
@@ -102,6 +119,47 @@ const server = http.createServer((req, res) => {
       );
       return;
     }
+    // 埋め込み（14-memory.md）。意味は分からないので、文字の2連と単語の重なりで決まる数値を返す。
+    // 同じ語を含む文どうしが近くなる。AKARI_MOCK_NO_EMBED=1 で「対応していない」（404）。
+    if (url.endsWith('/embeddings')) {
+      if (process.env.AKARI_MOCK_NO_EMBED === '1') {
+        res.writeHead(404, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: 'not found' } }));
+        return;
+      }
+      const input = Array.isArray(payload0.input) ? payload0.input : [String(payload0.input ?? '')];
+      const maxBatch = Number(process.env.AKARI_MOCK_EMBED_MAX_BATCH ?? 0);
+      if (maxBatch > 0 && input.length > maxBatch) {
+        res.writeHead(413, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: 'too many inputs' } }));
+        return;
+      }
+      const dims = Number(process.env.AKARI_MOCK_EMBED_DIMS ?? 256);
+      const delay = Number(process.env.AKARI_MOCK_EMBED_DELAY_MS ?? 0);
+      embedCalls += input.length;
+      setTimeout(() => {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            object: 'list',
+            model: payload0.model,
+            data: input.map((t, index) => ({
+              object: 'embedding',
+              index,
+              embedding: mockEmbed(String(t), dims),
+            })),
+          }),
+        );
+      }, delay);
+      return;
+    }
+    // 埋め込んだ件数（テストで「変わったファイルだけ作り直した」を確かめる）
+    if (url.endsWith('/_mock/embed-calls')) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ count: embedCalls }));
+      return;
+    }
+
     if (isEmbeddingOnly(String(payload0.model ?? '')) && url.includes('/chat/completions')) {
       res.writeHead(400, { 'content-type': 'application/json' });
       res.end(

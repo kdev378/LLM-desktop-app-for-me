@@ -33,11 +33,16 @@
 ベクトルは**フラットなバイナリ1ファイル**に置き、検索は総当たりで回す。
 
 ```
-<root>/index/<indexId>/
-  meta.json        # 索引の素性。これが合わないものは混ぜない
-  chunks.jsonl     # 1行1チャンクのメタ情報（本文込み）
-  vectors.bin      # Float32Array。chunks.jsonl と同じ順に dims 個ずつ
+<root>/index/<indexId>/          # indexId は作業フォルダの実体のパスの sha256 の先頭16桁
+  current.json     # 今使う版（{"generation": "g-…"}）。これの書き換えで差し替える
+  g-<id>/          # 版。更新のたびに新しい版を丸ごと書く
+    meta.json      # 索引の素性。これが合わないものは混ぜない
+    chunks.jsonl   # 1行1チャンクのメタ情報（本文込み）
+    vectors.bin    # Float32（リトルエンディアン）。chunks.jsonl と同じ順に dims 個ずつ
+  update.lock      # 更新中の目印（更新は同時に1つだけ）
 ```
+
+- 索引は作り直せる複製（キャッシュ）として扱う。壊れても消えても、会話やファイルは失われない
 
 ```jsonc
 // meta.json
@@ -57,7 +62,7 @@
     "normalized": true
   },
   "chunking": { "maxChars": 1200, "overlapChars": 200, "strategy": "lines-v1" },
-  "files": { "src/main.ts": { "hash": "sha256:…", "chunks": [0, 3], "mtimeMs": 0 } },
+  "files": { "src/main.ts": { "hash": "sha256:…", "size": 1234, "mtimeMs": 0, "first": 0, "count": 3 } },
   "counts": { "files": 412, "chunks": 5310 },
   "builtAt": "…", "updatedAt": "…"
 }
@@ -71,11 +76,8 @@
 | hnswlib / faiss | 同上。近似検索が要る規模ではない |
 | 外部のベクトルDBサーバ | 常駐が増える。ローカル完結の利点を失う |
 
-**総当たりで足りる根拠**: 5,000チャンク × 768次元 = 384万回の積和。
-JavaScript の `Float32Array` で数ミリ秒〜十数ミリ秒の見込み。
-50,000チャンクでも100ms前後の見込み。
-
-**この見込みは未検証**。実装したら実測する（`11-roadmap.md`）。
+**総当たりで足りる根拠（実測、2026-10-29）**: 384次元で **5,000チャンク 2.9ms、50,000チャンク 38.6ms**（1回の検索。
+開発用のクラウドの環境の CPU。自動テスト `memory.test.ts` が毎回測って出す）。見直しの目安の 300ms を大きく下回る。
 
 **破綻する条件**: チャンクが20万を超える、または検索が300msを超える。
 そのときは近似検索へ移す。それまで作らない。
@@ -114,8 +116,8 @@ type EmbeddingIdentity = {
   revision: string | null;             // 内蔵: モデルの版。外部: 分からなければ null
   fileSha256: string | null;           // 内蔵: モデルの重みの指紋。外部: null
   contract: string;                    // 使い方の約束（印・プーリング・正規化）の版。例 "e5-prefix-v1"
-  dims: number;
-  maxTokens: number;                   // チャンクの大きさをこれに合わせる
+  dims: number | null;                 // 外部の接続先は、最初に埋め込むまで分からない（null）
+  maxTokens: number | null;            // チャンクの大きさをこれに合わせる。外部の接続先は分からない（null）
   endpointId?: string;                 // 外部のとき
 };
 ```
@@ -254,9 +256,11 @@ v1 は素朴に行単位で切る。言語ごとの構文解析はしない。
 - `vectors.bin` の削除は「詰め直し」で行う。穴を残さない。
   詰め直しは新しいファイルへ書いて `rename` する（`07-data.md` の原子的書き込み）。
 - 更新は同時に1つだけ（索引ごとの目印のファイル）。検索は更新中でも、差し替える前の索引を読む。
-- 更新は中断されうる。**中断されたら索引は使わない**。
-  `meta.json` に `dirty: true` を立ててから作業し、完了時に落とす。
-  `dirty` のまま起動したら、その索引は「作り直しが要る」と表示する。壊れたまま検索しない。
+- 更新は中断されうる。**新しい版を全部書いてから `current.json` を差し替える**ので、途中で止まっても
+  前の版がそのまま使える（半端な索引で検索しない）。止まった版の残りは次の更新で片付ける。
+  `akari index status` に「前回の更新は途中で止まりました」と出る。
+  （2026-10-29 変更。当初の「`dirty` を立てて、立っていたら使わない」より、止まった後も検索が使える）
+- `meta.json` か中身が読めない・数が合わない索引は「壊れている」として使わず、作り直しを促す。
 
 ## 検索
 
@@ -269,10 +273,10 @@ type SearchHit = { path: string; startLine: number; endLine: number; score: numb
 - `path` を渡すとその配下だけに絞る。
 - **スコアをそのまま見せる**。閾値で黙って捨てない。関連が薄いことは数字で分かるようにする。
 - 結果の合計文字数は `toolOutputLimitBytes` で切る。
-- 索引が無い / `dirty` / 埋め込みモデルが違う → 検索せずに理由を返す。
+- 索引が無い / 壊れている / 埋め込みモデルが違う → 検索せずに理由を返す。
   **別のモデルのベクトルと混ぜて検索することは、絶対にしない**（無意味な結果が出るため）。
 
-- **使えるときだけ渡す**。索引が無い・`dirty`・モデルが違う・係につながらないときは `memory_search` を渡さない
+- **使えるときだけ渡す**。索引が無い・壊れている・モデルが違う・係につながらないときは `memory_search` を渡さない
   （使えない道具でモデルを迷わせない）。対話画面・`run`・ハーネスAPI・`mcp serve`（読み取りの道具として）で同じ扱い。
 
 ### ツールとしての位置づけ
@@ -288,7 +292,7 @@ type SearchHit = { path: string; startLine: number; endLine: number; score: numb
 ```sh
 akari index build              # 作業フォルダの索引を作る
 akari index update             # 変わったファイルだけ
-akari index status             # 件数、モデル、最終更新、dirty かどうか
+akari index status             # 件数、モデル、最終更新、索引の後で変わったファイル、今の設定で使えるか
 akari index search "認証はどこ" -k 5
 akari index rm
 ```
@@ -300,7 +304,7 @@ akari index rm
 
 | 項目 | 既定 | 効果 |
 |---|---|---|
-| `memory.enabled` | `false` | 索引機能そのものの有効・無効 |
+| `memory.enabled` | `true` | 索引があれば使う。false なら、索引があっても使わない（索引は `akari index build` で作るまで無いので、既定で何かが送られることはない） |
 | `memory.embedding.source` | `"builtin"` | `builtin`（内蔵）/ `endpoint`（外部）。将来 `lan` を足す |
 | `memory.embedding.endpointId` | `null` | 外部のとき。未指定なら生成と同じ接続先 |
 | `memory.embedding.model` | `null` | 外部のときのモデル名。未指定なら索引を作れない（推測しない。候補は一覧から示す） |

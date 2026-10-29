@@ -14,6 +14,8 @@ import {
   isLikelyChatModel,
   loadConfig,
   loadCredentials,
+  prepareMemory,
+  MEMORY_SEARCH_TOOL_NAME,
   resolveEndpoint,
   saveConfig,
   toTranscript,
@@ -195,7 +197,10 @@ export class RunManager {
         );
       }
       // MCP の道具（mcp__…）は、実行の始めにつないでから確かめる（ここではまだ分からない）
-      const unknown = tools.filter((t) => !ALL_TOOL_NAMES.includes(t) && !t.startsWith('mcp__'));
+      const unknown = tools.filter(
+        (t) =>
+          !ALL_TOOL_NAMES.includes(t) && t !== MEMORY_SEARCH_TOOL_NAME && !t.startsWith('mcp__'),
+      );
       if (unknown.length > 0) {
         throw new ApiError(
           400,
@@ -375,7 +380,9 @@ export class RunManager {
       const model = record.model ?? (await pickModel(endpoint, provider));
       record.model = model;
       const requested = record.tools ?? null;
-      const toolNames = (requested ?? ALL_TOOL_NAMES).filter((t) => !t.startsWith('mcp__'));
+      const toolNames = (requested ?? ALL_TOOL_NAMES).filter(
+        (t) => !t.startsWith('mcp__') && t !== MEMORY_SEARCH_TOOL_NAME,
+      );
       const forced = config.agent.toolsMode === 'auto' ? null : config.agent.toolsMode;
       const decision = await decideToolsMode({
         config,
@@ -404,8 +411,22 @@ export class RunManager {
         });
         for (const n of mcp.notices) this.emit(runId, { type: 'notice', ...n });
       }
-      const mcpTools =
-        requested === null ? mcp.tools : mcp.tools.filter((t) => requested.includes(t.name));
+      // 索引（14-memory.md）。worktree では元のリポジトリの索引を読むだけ（その実行の変更は入っていない）
+      const memory =
+        requested === null || requested.includes(MEMORY_SEARCH_TOOL_NAME)
+          ? await prepareMemory({
+              dataRoot: this.opts.root,
+              indexRoot: record.worktree ? record.sourceWorkspace : workspace.root,
+              config: fresh,
+              autoUpdate: !record.worktree,
+              logger: this.opts.logger,
+            })
+          : { tool: null, notices: [] };
+      for (const n of memory.notices) this.emit(runId, { type: 'notice', ...n });
+      const mcpTools = [
+        ...(requested === null ? mcp.tools : mcp.tools.filter((t) => requested.includes(t.name))),
+        ...(memory.tool && (requested === null || requested.length > 0) ? [memory.tool] : []),
+      ];
       const missing = (requested ?? []).filter(
         (t) => t.startsWith('mcp__') && !mcpTools.some((m) => m.name === t),
       );

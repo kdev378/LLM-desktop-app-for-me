@@ -204,6 +204,36 @@ export const contextSchema = z.object({
   digestModel: z.string().min(1).nullable().default(null),
 });
 
+/** 記憶（ベクトル索引）。docs/spec/14-memory.md「設定」 */
+export const memorySchema = z.object({
+  /** 索引があれば使う。false なら、索引があっても使わない。 */
+  enabled: z.boolean().default(true),
+  embedding: z
+    .object({
+      /** builtin … Akari が動かす内蔵のモデル（版を固定）/ endpoint … OpenAI 互換の接続先。将来 lan を足す */
+      source: z.enum(['builtin', 'endpoint']).default('builtin'),
+      /** endpoint のとき。null なら生成と同じ（選択中の）接続先。 */
+      endpointId: z.string().nullable().default(null),
+      /** endpoint のときのモデル名。null なら索引を作れない（推測しない）。 */
+      model: z.string().min(1).nullable().default(null),
+    })
+    .default({}),
+  /** 埋め込みの係が、使われずにこの時間たったら終わる。 */
+  helperIdleMs: z.number().int().min(10_000).max(86_400_000).default(600_000),
+  /** 実行の最初に自動で更新する、変わったファイルの上限。超えたら促すだけ。0 で自動更新しない。 */
+  autoUpdateMaxFiles: z.number().int().min(0).max(10_000).default(50),
+  maxFileBytes: z
+    .number()
+    .int()
+    .min(1024)
+    .max(64 * 1024 * 1024)
+    .default(1_048_576),
+  chunkChars: z.number().int().min(200).max(20_000).default(1200),
+  overlapChars: z.number().int().min(0).max(5000).default(200),
+  batchSize: z.number().int().min(1).max(256).default(16),
+  topK: z.number().int().min(1).max(30).default(8),
+});
+
 export const configSchema = z.object({
   schemaVersion: z.number().int().default(CONFIG_SCHEMA_VERSION),
   endpoints: z.array(endpointSchema).default([]),
@@ -218,6 +248,7 @@ export const configSchema = z.object({
     .default({}),
   server: serverSchema.default({}),
   mcpServers: z.array(mcpServerSchema).default([]),
+  memory: memorySchema.default({}),
 });
 
 export type Config = z.infer<typeof configSchema>;
@@ -231,6 +262,7 @@ export type ServerSettings = z.infer<typeof serverSchema>;
 export type SandboxSettings = AgentSettings['sandbox'];
 export type McpServerConfig = z.infer<typeof mcpServerSchema>;
 export type McpAuth = z.infer<typeof mcpAuthSchema>;
+export type MemorySettings = z.infer<typeof memorySchema>;
 export type PermissionMode = AgentSettings['permissionMode'];
 
 export function defaultConfig(): Config {

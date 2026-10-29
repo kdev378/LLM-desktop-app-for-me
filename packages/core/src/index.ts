@@ -21,6 +21,7 @@ export {
   type SandboxSettings,
   type McpServerConfig,
   type McpAuth,
+  type MemorySettings,
   mcpServerSchema,
   type PermissionMode,
   type Credentials,
@@ -153,6 +154,46 @@ export {
   type SandboxPolicy,
 } from './tools/sandbox.js';
 export { SECRET_ACCESS_TOOL_NAME } from './tools/secrets.js';
+
+// 記憶（docs/spec/14-memory.md）
+export { fetchEmbeddings, normalize, EmbeddingError } from './provider/embeddings.js';
+export {
+  EndpointEmbedder,
+  sameIdentity,
+  describeIdentity,
+  type Embedder,
+  type EmbeddingIdentity,
+  type EmbedKind,
+} from './memory/embedder.js';
+export { listIndexTargets, type IndexTarget, type TargetList } from './memory/files.js';
+export { chunkText, embedText, CHUNK_STRATEGY, type Chunk } from './memory/chunk.js';
+export {
+  indexDir,
+  loadIndex,
+  readCurrentMeta,
+  removeIndex,
+  hasLeftovers,
+  IndexBusyError,
+  type IndexMeta,
+  type IndexState,
+  type LoadedIndex,
+} from './memory/store.js';
+export {
+  updateIndex,
+  effectiveChunkChars,
+  type UpdateResult,
+  type IndexProgress,
+  type ChangeSummary,
+} from './memory/indexer.js';
+export { searchIndex, formatHits, type SearchHit } from './memory/search.js';
+export { createMemorySearchTool, MEMORY_SEARCH_TOOL_NAME } from './memory/tool.js';
+export {
+  prepareMemory,
+  createEmbedder,
+  MemoryConfigError,
+  type PreparedMemory,
+  type MemoryNotice,
+} from './memory/setup.js';
 
 // MCP（docs/spec/13-mcp.md）
 export {

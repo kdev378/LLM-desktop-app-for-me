@@ -331,11 +331,46 @@ mcp
   .description('有効なサーバ全部へつなぎ、起動時間と道具の数を出す')
   .action(async () => run(() => import('./commands/mcp.js').then((m) => m.mcpDoctor(globals()))));
 
+const idx = program.command('index').description('作業フォルダの索引（意味の近さで探す記憶）');
+const memoryCmd = () => import('./commands/memory.js');
+idx
+  .command('build')
+  .description('索引を作る（作り直す）')
+  .option('-C, --cwd <dir>', '作業フォルダ（既定はカレント）')
+  .option('-y, --yes', '外部の接続先へ送るときの確認を省く')
+  .action(async (o) =>
+    run(() => memoryCmd().then((m) => m.indexBuild({ ...globals(), ...o }, 'build'))),
+  );
+idx
+  .command('update')
+  .description('変わったファイルだけ更新する')
+  .option('-C, --cwd <dir>', '作業フォルダ（既定はカレント）')
+  .option('-y, --yes', '外部の接続先へ送るときの確認を省く')
+  .action(async (o) =>
+    run(() => memoryCmd().then((m) => m.indexBuild({ ...globals(), ...o }, 'update'))),
+  );
+idx
+  .command('status')
+  .description('件数・埋め込みのモデル・最終更新・索引の後で変わったファイル')
+  .option('-C, --cwd <dir>', '作業フォルダ（既定はカレント）')
+  .action(async (o) => run(() => memoryCmd().then((m) => m.indexStatus({ ...globals(), ...o }))));
+idx
+  .command('search <問い>')
+  .description('索引を探す（モデルの memory_search と同じ）')
+  .option('-C, --cwd <dir>', '作業フォルダ（既定はカレント）')
+  .option('-k <件数>', '何件出すか（既定は設定の memory.topK）')
+  .option('--path <dir>', 'このフォルダの下だけ')
+  .action(async (q, o) =>
+    run(() => memoryCmd().then((m) => m.indexSearch(q, { ...globals(), ...o }))),
+  );
+idx
+  .command('rm')
+  .description('この作業フォルダの索引を消す（ファイルには触らない）')
+  .option('-C, --cwd <dir>', '作業フォルダ（既定はカレント）')
+  .action(async (o) => run(() => memoryCmd().then((m) => m.indexRemove({ ...globals(), ...o }))));
+
 // まだ無い機能。あるように見せない。
-for (const [name, desc, when] of [
-  ['index', 'ベクトル索引', 'P5'],
-  ['web', 'Web検索と取得', 'P6'],
-] as const) {
+for (const [name, desc, when] of [['web', 'Web検索と取得', 'P6']] as const) {
   program
     .command(name, { hidden: true })
     .description(`${desc}（未実装）`)

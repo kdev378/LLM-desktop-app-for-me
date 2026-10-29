@@ -208,7 +208,7 @@ test('到達できない接続先は終了コード4', async () => {
 });
 
 test('未実装のコマンドは、あるように見せず終了コード2', async () => {
-  for (const name of ['index', 'web']) {
+  for (const name of ['web']) {
     const r = await akari([name]);
     assert.equal(r.code, 2, `${name} は未実装として終了コード2`);
     assert.match(r.stderr, /まだ実装されていません/);
@@ -249,6 +249,71 @@ test('mcp add は起動する内容を見せて同意を取り、パイプの中
 
   assert.equal((await akari(['mcp', 'rm', 'mock'], undefined, { env })).code, 0);
   assert.match((await akari(['mcp', 'list'], undefined, { env })).stdout, /登録されていません/);
+});
+
+test('index: 作る・探す・状態・更新・消す。秘密のファイルは入らない', async () => {
+  const own = await fs.mkdtemp(path.join(os.tmpdir(), 'akari-cli-idx-'));
+  const work = await fs.mkdtemp(path.join(os.tmpdir(), 'akari-cli-idxw-'));
+  await fs.writeFile(
+    path.join(work, 'auth.ts'),
+    '// ログインと認証の処理\nexport function login() {}\n',
+  );
+  await fs.writeFile(
+    path.join(work, 'cart.ts'),
+    '// 買い物かごの合計\nexport function total() {}\n',
+  );
+  await fs.writeFile(path.join(work, '.env'), 'SECRET=認証の合言葉\n');
+  const env = { AKARI_HOME: own };
+  const run = (args: string[], input?: string) => akari([...args, '-C', work], input, { env });
+  await akari(
+    ['config', 'endpoints', 'add', '--name', 'mock', '--url', `http://127.0.0.1:${PORT}/v1`],
+    undefined,
+    { env },
+  );
+
+  const builtin = await run(['index', 'build']);
+  assert.equal(builtin.code, 2);
+  assert.match(builtin.stderr, /内蔵の埋め込みモデルはまだ使えません/);
+  await akari(['config', 'set', 'memory.embedding.source', 'endpoint'], undefined, { env });
+  await akari(['config', 'set', 'memory.embedding.model', 'mock-embed'], undefined, { env });
+
+  const built = await run(['index', 'build']);
+  assert.equal(built.code, 0, built.stderr);
+  assert.match(built.stdout, /索引を作りました: ファイル 2 件/);
+  assert.match(built.stdout, /秘密のファイル 1/);
+
+  const hit = await run(['--json', 'index', 'search', '認証の処理', '-k', '2']);
+  const hits = JSON.parse(hit.stdout) as Array<{ path: string; startLine: number }>;
+  assert.equal(hits[0]!.path, 'auth.ts');
+  assert.ok(hits.every((h) => h.path !== '.env'));
+
+  assert.match((await run(['index', 'update'])).stdout, /変わったファイルはありません/);
+  await fs.writeFile(path.join(work, 'cart.ts'), '// 合計を変えた\nexport function total2() {}\n');
+  assert.match((await run(['index', 'status'])).stdout, /索引の後で変わったファイル: 1 件/);
+  assert.match((await run(['index', 'update'])).stdout, /追加 0・変更 1・削除 0/);
+
+  assert.match((await run(['index', 'rm'])).stdout, /索引を消しました/);
+  assert.match((await run(['index', 'status'])).stdout, /索引はありません/);
+});
+
+test('index: 外部の接続先へ送るときは、件数を見せて確かめる（パイプの中は -y が要る）', async () => {
+  const own = await fs.mkdtemp(path.join(os.tmpdir(), 'akari-cli-idxx-'));
+  const work = await fs.mkdtemp(path.join(os.tmpdir(), 'akari-cli-idxxw-'));
+  await fs.writeFile(path.join(work, 'a.ts'), 'const a = 1;\n');
+  const env = { AKARI_HOME: own };
+  // 外部に見える URL（届かない）。確認の手前で止まることだけを見る
+  await akari(
+    ['config', 'endpoints', 'add', '--name', 'cloud', '--url', 'https://embed.invalid/v1'],
+    undefined,
+    { env },
+  );
+  await akari(['config', 'set', 'memory.embedding.source', 'endpoint'], undefined, { env });
+  await akari(['config', 'set', 'memory.embedding.model', 'm'], undefined, { env });
+  const r = await akari(['index', 'build', '-C', work], '', { env });
+  assert.equal(r.code, 3);
+  assert.match(r.stderr, /インターネット上にあります/);
+  assert.match(r.stderr, /ファイル 1 件/);
+  assert.match(r.stderr, /-y を付けてください/);
 });
 
 test('診断の書き出しに鍵と会話本文が含まれない', async () => {

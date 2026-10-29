@@ -3,6 +3,7 @@ import path from 'node:path';
 import {
   Workspace,
   Session,
+  MEMORY_SEARCH_TOOL_NAME,
   describeSandbox,
   createProvider,
   type ApprovalDecision,
@@ -25,6 +26,8 @@ import {
   decideToolsMode,
   mcpToolsFor,
   printMcpNotices,
+  prepareCliMemory,
+  printMemoryNotices,
   resolvePermission,
   resolveToolsModeOption,
   toolNamesFor,
@@ -123,6 +126,9 @@ export async function runCommand(promptArgs: string[], opts: RunOptions): Promis
   // MCP サーバは、この実行の間だけつなぐ（docs/spec/13-mcp.md「起動と生存」）
   const mcp = await connectMcp(ctx, scope, workspace.root);
   printMcpNotices(mcp);
+  // 索引があれば、変わったファイルだけ更新して memory_search を渡す（14-memory.md）
+  const memory = await prepareCliMemory(ctx, scope, workspace.root);
+  printMemoryNotices(memory);
   try {
     await runSession();
   } finally {
@@ -152,7 +158,7 @@ export async function runCommand(promptArgs: string[], opts: RunOptions): Promis
         : {}),
       permissionMode,
       toolNames,
-      extraTools: mcpToolsFor(mcp.tools, scope),
+      extraTools: [...mcpToolsFor(mcp.tools, scope), ...(memory.tool ? [memory.tool] : [])],
       maxSteps,
       toolsMode: effectiveMode,
       sandbox: ctx.config.agent.sandbox,
@@ -354,8 +360,9 @@ export async function runCommand(promptArgs: string[], opts: RunOptions): Promis
 function describeTools(opts: RunOptions, names: string[]): string {
   if (opts.noTools) return 'なし（--no-tools）';
   const mcp = names.filter((n) => n.startsWith('mcp__')).length;
-  const own = names.length - mcp;
-  const tail = mcp > 0 ? ` + MCP ${mcp}種` : '';
+  const memory = names.includes(MEMORY_SEARCH_TOOL_NAME);
+  const own = names.length - mcp - (memory ? 1 : 0);
+  const tail = (mcp > 0 ? ` + MCP ${mcp}種` : '') + (memory ? ' + 索引' : '');
   if (opts.readOnly) return `読み取りのみ ${own}種${tail}（--read-only）`;
   return `${own}種${tail}`;
 }

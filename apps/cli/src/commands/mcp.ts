@@ -386,6 +386,8 @@ export async function mcpServe(opts: McpServeCliOptions): Promise<void> {
   info(c.dim(`  権限: ${serveLabel(permission)}`));
   info(c.dim(`  承認なしで実行されるもの: ${handle.tools.join(', ')}`));
   if (handle.sandbox) info(c.dim(`  コマンド: ${describeSandbox(handle.sandbox)}`));
+  for (const n of handle.notices)
+    info(n.level === 'warn' ? c.yellow(`  ! ${n.message}`) : c.dim(`  ${n.message}`));
   if (permission !== 'readOnly') {
     info(
       c.dim(

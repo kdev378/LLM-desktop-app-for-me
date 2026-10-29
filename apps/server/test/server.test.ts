@@ -783,3 +783,26 @@ test('MCP の道具も API の実行で使え、承認には「取り消せま�
     await s.server.close();
   }
 });
+
+test('tools に memory_search を挙げられる（索引が無ければ渡さないだけで、断らない）', async () => {
+  const s = await setup();
+  try {
+    const r = await s.call('POST', '/v1/runs', {
+      prompt: '探して',
+      workspace: s.repo,
+      tools: ['read_file', 'memory_search'],
+    });
+    assert.equal(r.status, 201, JSON.stringify(r.body));
+    await waitFor(async () => (await statusOf(s, r.body.runId)).status === 'done');
+    const sent = s.provider.calls.at(-1)!.tools!.map((t) => t.name);
+    assert.deepEqual(sent, ['read_file']);
+    const bad = await s.call('POST', '/v1/runs', {
+      prompt: 'x',
+      workspace: s.repo,
+      tools: ['nope'],
+    });
+    assert.equal(bad.status, 400);
+  } finally {
+    await s.server.close();
+  }
+});

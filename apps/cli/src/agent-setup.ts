@@ -1,6 +1,8 @@
 import {
   McpHub,
   loadCredentials,
+  prepareMemory,
+  type PreparedMemory,
   decideToolsMode as decide,
   parsePermission,
   windowTokensFor as windowFor,
@@ -98,6 +100,33 @@ export async function connectMcp(ctx: CliContext, scope: ToolScope, cwd: string)
 /** MCP の知らせを標準エラーへ出す（--json でも出す。使えないサーバを黙って飛ばさない）。 */
 export function printMcpNotices(hub: McpHub): void {
   for (const n of hub.notices) {
+    process.stderr.write(
+      (n.level === 'warn' ? c.yellow(`! ${n.message}`) : c.dim(n.message)) + '\n',
+    );
+  }
+}
+
+/**
+ * 作業フォルダの索引（14-memory.md）。あれば、変わったファイルだけ更新して memory_search を作る。
+ * 道具を渡さない実行では見ない。知らせは呼び出し側が出す。
+ */
+export async function prepareCliMemory(
+  ctx: CliContext,
+  scope: ToolScope,
+  workspaceRoot: string,
+): Promise<PreparedMemory> {
+  if (scope === 'off') return { tool: null, notices: [], index: null };
+  return prepareMemory({
+    dataRoot: ctx.root,
+    indexRoot: workspaceRoot,
+    config: ctx.config,
+    autoUpdate: true,
+    logger: ctx.logger,
+  });
+}
+
+export function printMemoryNotices(m: PreparedMemory): void {
+  for (const n of m.notices) {
     process.stderr.write(
       (n.level === 'warn' ? c.yellow(`! ${n.message}`) : c.dim(n.message)) + '\n',
     );
