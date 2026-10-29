@@ -209,7 +209,7 @@ type EmbeddingIdentity = {
 
 | 候補 | 確かめたこと | 気になる点 |
 |---|---|---|
-| `ibm-granite/granite-embedding-97m-multilingual-r2` | 97M、384次元、32,768トークン、200言語以上、ModernBERT、Apache 2.0、ONNX あり（2026-05 公開） | 公開元の順位以外の独立した評価は未確認 |
+| `ibm-granite/granite-embedding-97m-multilingual-r2` | 97M（実効 約28M）、384次元、8,192〜32,768トークン（資料で食い違う）、200言語以上、ModernBERT、Apache 2.0、ONNX あり（2026-05 公開） | 公開元の順位以外の独立した評価は未確認 |
 | `hotchpotch/bekko-embedding-v1-a25m` / `-a8m` | 実効 約25M / 約8M、384次元（256/128/64 に縮められる）、8,192トークン、MIT、Transformers.js で動く見本あり | 数値は作者の表のみ。個人の公開で、保守の続き方が読めない |
 | `cl-nagoya/ruri-v3-30m` / `-70m` | 37M（実効 約10M）・256次元、8,192トークン、JMTEB 平均 74.51（30m）、70m は Apache 2.0 | 日本語向け。英語・コードの強さは未確認。30m のライセンスは本体の説明で未確認 |
 | `minishlab/potion-multilingual-128M`（静的） | 256次元、MIT、bge-m3 から蒸留、101言語。表を引くだけで非常に速い | 精度は一段落ちる。最軽量の比較の基準として測る |
