@@ -258,7 +258,9 @@ export const runCommandTool: ToolSpec = {
       !ok && launch && looksBlocked(result.stderr)
         ? '\n\n[akari] このコマンドは閉じ込めの中で動いています。作業フォルダ・一時フォルダ・道具のキャッシュの外への書き込みと、' +
           '秘密の場所（~/.ssh など）や作業フォルダの中の秘密のファイル（.env など）の読み取りは塞いでいます。' +
-          '作業フォルダの中の秘密のファイルが要るなら、request_secret_access で理由を添えて利用者に許可を求めてください。'
+          (ctx.canRequestSecrets === false
+            ? ''
+            : '作業フォルダの中の秘密のファイルが要るなら、request_secret_access で理由を添えて利用者に許可を求めてください。')
         : '';
     const incomplete = launch?.secretsIncomplete
       ? '\n\n[akari] 作業フォルダが大きいため、秘密のファイル（.env など）を全部は探しきれず、一部はコマンドから読めた可能性があります。'

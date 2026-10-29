@@ -2,6 +2,7 @@ import {
   ALL_TOOL_NAMES,
   ChangeJournal,
   ConversationStore,
+  McpHub,
   Session,
   Workspace,
   createProvider,
@@ -12,6 +13,7 @@ import {
   isAkariError,
   isLikelyChatModel,
   loadConfig,
+  loadCredentials,
   resolveEndpoint,
   saveConfig,
   toTranscript,
@@ -192,7 +194,8 @@ export class RunManager {
           'API から権限を広げることはできません（設定の agent.gitTools）。',
         );
       }
-      const unknown = tools.filter((t) => !ALL_TOOL_NAMES.includes(t));
+      // MCP の道具（mcp__…）は、実行の始めにつないでから確かめる（ここではまだ分からない）
+      const unknown = tools.filter((t) => !ALL_TOOL_NAMES.includes(t) && !t.startsWith('mcp__'));
       if (unknown.length > 0) {
         throw new ApiError(
           400,
@@ -363,13 +366,16 @@ export class RunManager {
     this.setStatus(record, 'running');
 
     let session: Session;
+    // MCP サーバは、この実行の間だけつなぐ（13-mcp.md「起動と生存」）
+    let mcp = McpHub.empty();
     try {
       const { config } = await loadConfig(this.opts.root);
       const endpoint = await resolveEndpoint(config, record.endpointId, this.opts.root);
       const provider = (this.opts.providerFor ?? defaultProvider)(endpoint, this.opts.logger);
       const model = record.model ?? (await pickModel(endpoint, provider));
       record.model = model;
-      const toolNames = record.tools ?? ALL_TOOL_NAMES;
+      const requested = record.tools ?? null;
+      const toolNames = (requested ?? ALL_TOOL_NAMES).filter((t) => !t.startsWith('mcp__'));
       const forced = config.agent.toolsMode === 'auto' ? null : config.agent.toolsMode;
       const decision = await decideToolsMode({
         config,
@@ -388,6 +394,28 @@ export class RunManager {
       const conversation = await this.openConversation(record.conversationId!);
       const workspace = await Workspace.open(record.workspace, this.opts.root);
       const fresh = (await loadConfig(this.opts.root)).config;
+      // 道具を渡さない実行（tools: []）ではつながない。tools を指定したら、名前を挙げた MCP の道具だけ
+      if ((requested === null || requested.length > 0) && fresh.mcpServers.some((s) => s.enabled)) {
+        const { credentials } = await loadCredentials(this.opts.root);
+        mcp = await McpHub.connect(fresh.mcpServers, {
+          credentials,
+          logger: this.opts.logger,
+          cwd: workspace.root,
+        });
+        for (const n of mcp.notices) this.emit(runId, { type: 'notice', ...n });
+      }
+      const mcpTools =
+        requested === null ? mcp.tools : mcp.tools.filter((t) => requested.includes(t.name));
+      const missing = (requested ?? []).filter(
+        (t) => t.startsWith('mcp__') && !mcpTools.some((m) => m.name === t),
+      );
+      if (missing.length > 0) {
+        this.emit(runId, {
+          type: 'notice',
+          level: 'warn',
+          message: `MCP の道具が見つからないため渡しません: ${missing.join(', ')}`,
+        });
+      }
       const compaction = conversation.latestCompaction();
       session = Session.create({
         provider,
@@ -406,6 +434,7 @@ export class RunManager {
         },
         permissionMode: record.permissionMode,
         toolNames,
+        extraTools: mcpTools,
         maxSteps: record.maxSteps,
         toolsMode: decision.effective,
         sandbox: fresh.agent.sandbox,
@@ -428,6 +457,7 @@ export class RunManager {
           message: `実行が始まる前に失敗したため、届いていた追記 ${live.pendingMessages.length} 件はモデルへ渡していません。`,
         });
       }
+      await mcp.close();
       await this.finish(record, 'failed', 'error', message);
       return;
     }
@@ -451,6 +481,7 @@ export class RunManager {
       for (const t of live.approvalTimers.values()) clearTimeout(t);
       live.approvalTimers.clear();
       live.session = null;
+      await mcp.close();
     }
 
     // 実行が先に終わって渡らなかった追記は、続きとして新しく送る（黙って落とさない）

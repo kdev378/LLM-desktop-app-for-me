@@ -128,6 +128,44 @@ export const agentSchema = z.object({
     ]),
 });
 
+/**
+ * MCP サーバの認証。docs/spec/13-mcp.md「認証（OAuth を後から足す前提）」
+ * 種類（type）で分ける。oauth は後から足す（ここに種類を1つ足すだけで、ほかの形は変わらない）。
+ */
+export const mcpAuthSchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('none') }),
+  /** 固定の鍵を Authorization: Bearer で送る。token は 'env:NAME'（環境変数から）か、そのままの値。 */
+  z.object({ type: z.literal('bearer'), token: z.string().min(1) }),
+]);
+
+/** MCP サーバの登録。docs/spec/13-mcp.md「使う側」 */
+export const mcpServerSchema = z
+  .object({
+    id: z.string().min(1),
+    /** 道具名の接頭辞（mcp__<名前>__）にも使う。 */
+    name: z.string().regex(/^[A-Za-z0-9_-]{1,32}$/, '名前は英数字・_・- の32文字まで'),
+    enabled: z.boolean().default(true),
+    transport: z.enum(['stdio', 'http']),
+    command: z.string().min(1).optional(),
+    args: z.array(z.string()).default([]),
+    /** 子プロセスに渡す環境変数。値は 'env:NAME' で、Akari の環境変数から引ける。 */
+    env: z.record(z.string()).default({}),
+    cwd: z.string().nullable().default(null),
+    url: z.string().url().optional(),
+    /** HTTP のヘッダ。値は 'env:NAME' で書ける。 */
+    headers: z.record(z.string()).default({}),
+    auth: mcpAuthSchema.default({ type: 'none' }),
+    startupTimeoutMs: z.number().int().min(1000).max(300_000).default(15_000),
+    toolTimeoutMs: z.number().int().min(1000).max(3_600_000).default(60_000),
+    /** ask … 毎回承認 / readOnly … 読み取りの注釈がある道具だけ自動 / full … 全部自動（権限モードとの厳しいほう） */
+    trust: z.enum(['ask', 'readOnly', 'full']).default('ask'),
+    /** 利用者が同意したときの、起動する内容の指紋。無い・合わなければ起動しない。 */
+    consent: z.object({ fingerprint: z.string(), at: z.string() }).nullable().default(null),
+  })
+  .refine((s) => (s.transport === 'stdio' ? !!s.command : !!s.url), {
+    message: 'stdio には command、http には url が要ります',
+  });
+
 /** ハーネスAPI（akari serve）。docs/spec/12-harness-api.md */
 export const serverSchema = z.object({
   port: z.number().int().min(1024).max(65535).default(7801),
@@ -179,6 +217,7 @@ export const configSchema = z.object({
     .object({ maxParallelRuns: z.number().int().min(1).max(16).default(4) })
     .default({}),
   server: serverSchema.default({}),
+  mcpServers: z.array(mcpServerSchema).default([]),
 });
 
 export type Config = z.infer<typeof configSchema>;
@@ -190,6 +229,8 @@ export type AgentSettings = z.infer<typeof agentSchema>;
 export type ContextSettings = z.infer<typeof contextSchema>;
 export type ServerSettings = z.infer<typeof serverSchema>;
 export type SandboxSettings = AgentSettings['sandbox'];
+export type McpServerConfig = z.infer<typeof mcpServerSchema>;
+export type McpAuth = z.infer<typeof mcpAuthSchema>;
 export type PermissionMode = AgentSettings['permissionMode'];
 
 export function defaultConfig(): Config {

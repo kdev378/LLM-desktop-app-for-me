@@ -36,6 +36,8 @@ export type ToolContext = {
   logger?: Logger;
   /** この会話の生の記録（recall_search / recall_read が使う。16-context.md）。 */
   transcript?: () => readonly TranscriptEntry[];
+  /** request_secret_access を渡していない呼び出し（akari mcp serve）なら false。案内の文を変える。 */
+  canRequestSecrets?: boolean;
   /** コマンドの閉じ込め（05-agent.md）。省略すると閉じ込めない（テストや、閉じ込めを持たない呼び出し）。 */
   sandbox?: {
     status: SandboxStatus;
@@ -87,7 +89,14 @@ export type ToolSpec = {
   /** 承認を求める前に、何が起きるかを見せるための材料。 */
   preview?: (args: unknown, ctx: ToolContext) => Promise<ToolPreview | undefined>;
   run: (args: unknown, ctx: ToolContext) => Promise<ToolResult>;
+  /**
+   * MCP サーバの道具なら、その出どころ（docs/spec/13-mcp.md）。
+   * 承認の決め方（trust と権限モードの厳しいほう）と、「取り消せない」表示に使う。
+   */
+  mcp?: { server: string; tool: string; trust: McpTrust; readOnlyHint: boolean };
 };
+
+export type McpTrust = 'ask' | 'readOnly' | 'full';
 
 export function denied(message: string, kind: ToolResult['errorKind'] = 'denied'): ToolResult {
   return { ok: false, summary: message, content: message, errorKind: kind };

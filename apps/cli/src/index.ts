@@ -271,9 +271,68 @@ program
   .option('--limit <n>', '表示件数。既定10')
   .action(async (q, o) => run(() => recallCommand(q, { ...globals(), ...o })));
 
+const collect = (v: string, prev: string[]) => [...prev, v];
+const mcp = program.command('mcp').description('MCP サーバの登録（Akari から外部の道具を使う）');
+mcp
+  .command('add')
+  .description('MCP サーバを登録する（起動する内容を見せて同意を取ります）')
+  .requiredOption('--name <名前>', '道具名の接頭辞にもなる（英数字・_・- の32文字まで）')
+  .option('--command <コマンド>', '子プロセスとして起動する（stdio）')
+  .option('--arg <引数>', 'コマンドの引数。繰り返して並べる', collect, [])
+  .option(
+    '--env <名前=値>',
+    '子プロセスへ渡す環境変数。値は env:NAME で Akari の環境変数から',
+    collect,
+    [],
+  )
+  .option('--cwd <dir>', '子プロセスの作業ディレクトリ（既定は作業フォルダ）')
+  .option('--url <URL>', 'HTTP（Streamable HTTP）でつなぐ')
+  .option('--header <名前: 値>', 'HTTP のヘッダ。値は env:NAME で書ける', collect, [])
+  .option('--bearer-env <変数名>', 'Authorization: Bearer の鍵を環境変数から読む')
+  .option('--trust <ask|read-only|full>', '承認の扱い。既定 ask（毎回聞く）')
+  .option('-y, --yes', '確認なしで同意する（内容を確かめたうえで）')
+  .action(async (o) =>
+    run(() => import('./commands/mcp.js').then((m) => m.mcpAdd({ ...globals(), ...o }))),
+  );
+mcp
+  .command('list')
+  .description('登録済みの MCP サーバと、同意の状態')
+  .action(async () => run(() => import('./commands/mcp.js').then((m) => m.mcpList(globals()))));
+mcp
+  .command('tools <名前>')
+  .description('そのサーバへつなぎ、道具の一覧と注釈を出す')
+  .action(async (n) =>
+    run(() => import('./commands/mcp.js').then((m) => m.mcpTools(n, globals()))),
+  );
+mcp
+  .command('trust <名前>')
+  .description('手で書いた・変えた設定を確かめて、起動に同意する')
+  .option('-y, --yes', '確認なしで同意する（内容を確かめたうえで）')
+  .action(async (n, o) =>
+    run(() => import('./commands/mcp.js').then((m) => m.mcpTrust(n, { ...globals(), ...o }))),
+  );
+mcp
+  .command('rm <名前>')
+  .description('MCP サーバの登録を消す')
+  .action(async (n) =>
+    run(() => import('./commands/mcp.js').then((m) => m.mcpRemove(n, globals()))),
+  );
+mcp
+  .command('serve')
+  .description('Akari の道具を MCP（stdio）で出す。Claude Code などから使う')
+  .option('-w, --workspace <dir>', '作業フォルダ（既定はカレント）')
+  .option('--permission <read-only|auto-edit|full>', '出す道具。既定 read-only（読み取りだけ）')
+  .option('--http', 'HTTP で出す（まだ実装していません）')
+  .action(async (o) =>
+    run(() => import('./commands/mcp.js').then((m) => m.mcpServe({ ...globals(), ...o }))),
+  );
+mcp
+  .command('doctor')
+  .description('有効なサーバ全部へつなぎ、起動時間と道具の数を出す')
+  .action(async () => run(() => import('./commands/mcp.js').then((m) => m.mcpDoctor(globals()))));
+
 // まだ無い機能。あるように見せない。
 for (const [name, desc, when] of [
-  ['mcp', 'MCP の登録と公開', 'P4'],
   ['index', 'ベクトル索引', 'P5'],
   ['web', 'Web検索と取得', 'P6'],
 ] as const) {

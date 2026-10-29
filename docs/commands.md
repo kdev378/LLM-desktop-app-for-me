@@ -72,6 +72,8 @@ akari run -m qwen3-4b "直して"     # 後ろ（同じ）
 | `doctor` | 接続先・設定・データの状態 | 触らない |
 | `config …` | 設定と接続先の操作 | 設定ファイルのみ |
 | `serve` | ハーネスAPI。外部のツールから HTTP で実行を頼めるようにする | **触る**（頼まれた実行が。承認は HTTP で返す） |
+| `mcp …` | 外部の MCP サーバの登録（その道具を Akari に使わせる） | 設定ファイルのみ（登録したサーバが何をするかは別） |
+| `mcp serve` | Akari の道具を MCP で出す（Claude Code などから使う） | 既定は触らない。`--permission auto-edit` 以上で**触る**（記録あり・取り消せる） |
 
 ---
 
@@ -672,6 +674,94 @@ curl -s  -H "$H" "localhost:7801/v1/runs/<runId>/transcript?chunk=2000"   # チ�
   元のリポジトリには触らない。Akari は commit も merge もしない
 - 承認待ちのまま `agent.approvalTimeoutMs` を過ぎたら、拒否として扱う（既定は無期限）
 
+## `akari mcp` — 外部の道具（MCP サーバ）を使う
+
+MCP は、モデルに道具を渡すための共通の口。ファイル検索・ブラウザ・社内ツールなど、
+誰かが作った MCP サーバを登録すると、その道具を Akari のモデルが使えるようになる。仕様は `docs/spec/13-mcp.md`。
+
+**登録することは、そのプログラムを自分の PC で動かすことと同じ**。登録するときに、何が動くかを見せて同意を取る。
+
+```sh
+# 子プロセスとして起こすサーバ（多くはこちら）
+akari mcp add --name fs --command npx --arg -y --arg @modelcontextprotocol/server-filesystem --arg ~/docs
+# HTTP でつなぐサーバ。鍵は環境変数から（設定ファイルに平文で書かない）
+akari mcp add --name search --url http://localhost:9000/mcp --bearer-env SEARCH_TOKEN
+
+akari mcp list            # 登録済みと同意の状態（つながない）
+akari mcp tools fs        # つないで、道具の一覧と「読み取り / 実行」の別を出す
+akari mcp doctor          # 有効な全サーバへつなぎ、起動時間と道具の数を出す
+akari mcp trust fs        # 設定を手で書いた・変えたときに、確かめて同意し直す
+akari mcp rm fs
+```
+
+| `add` のオプション | 意味 |
+|---|---|
+| `--command` / `--arg`（繰り返し） | 起こすコマンドと引数 |
+| `--env 名前=値`（繰り返し） | サーバへ渡す環境変数。`値` を `env:NAME` にすると Akari の環境変数から |
+| `--cwd <dir>` | サーバの作業ディレクトリ（既定は作業フォルダ） |
+| `--url` | HTTP（Streamable HTTP）でつなぐ |
+| `--header "名前: 値"`（繰り返し） | HTTP のヘッダ。値は `env:NAME` で書ける |
+| `--bearer-env <変数名>` | `Authorization: Bearer <鍵>` の鍵を環境変数から |
+| `--trust ask\|read-only\|full` | 承認の扱い（下）。既定 `ask` |
+| `-y` | 確認なしで同意（パイプの中では必須。内容を確かめたうえで） |
+
+- 登録した後で設定ファイルの中身（コマンド・引数・環境変数・URL など）が変わると、**同意し直すまで起動しない**。
+  誰かが設定を書き換えて別のプログラムを動かす手口を塞ぐため。`akari mcp trust <名前>` で同意し直す
+- MCP サーバは Akari の作業フォルダの制限とコマンドの閉じ込めを**受けない**（ファイル操作のサーバなどは指定した場所を読む必要があるため）
+- Akari の環境変数はそのまま渡さない（`PATH` `HOME` など動くのに要るものと、`--env` で渡したものだけ）
+- ブラウザでログインする方式（OAuth）はまだ無い。後から足せる形にしてある
+
+### 使われ方
+
+`akari run`・対話画面・ハーネスAPI の実行で、登録して有効なサーバの道具が `mcp__<名前>__<道具名>` として渡る。
+
+- つなげなかったサーバ（起動失敗・時間切れ・同意なし）は使わず、理由を1度出して、ほかの道具で作業を続ける
+- `--no-tools` ではつながない。`--read-only` では「読み取り」の道具だけ渡す
+- 対話画面は開いている間、`run` とハーネスAPIは1回の実行の間だけつなぐ。閉じるとサーバ（とその子プロセス）は止まる
+
+**承認**: MCP の道具が何をするかは Akari には分からない。だから既定は厳しくする。
+
+| `trust` | 承認 |
+|---|---|
+| `ask`（既定） | 道具を使うたびに必ず聞く（権限が `full` でも。「この実行中は許可」も出さない） |
+| `read-only` | サーバが「読み取りだけ」と申告した道具は聞かない。ほかは聞く。**申告を信じる設定**（Akari には確かめられない） |
+| `full` | 権限モードに従う。`full` なら聞かずに使う。`ask` / `auto-edit` なら実行系は聞く |
+
+- 承認の画面には「この操作は取り消せません」と出る。MCP の道具が変えたものは Akari の変更記録に残らず、`akari undo` で戻せない
+- 一度断った後は、`trust: full`・権限 `full` でも実行系の MCP の道具は聞く（コマンドと同じ）
+
+## `akari mcp serve` — Akari の道具を MCP で出す
+
+Claude Code などの MCP の使う側から、Akari の道具（ファイルの読み書き・検索・コマンド）を使えるようにする。
+利点は、Akari の守りがそのまま付いてくること: **作業フォルダの外は触らない、変更は記録されて取り消せる**。
+
+```sh
+akari mcp serve --workspace ~/proj                          # 読み取りだけ（既定）
+akari mcp serve --workspace ~/proj --permission auto-edit   # + ファイルの編集
+akari mcp serve --workspace ~/proj --permission full        # + コマンドの実行
+```
+
+相手のプログラムが起こすもの（標準入出力でやり取りする）なので、自分で端末から起こして使うものではない。
+Claude Code に登録する例（書式は Claude Code 側の説明で確かめてください）:
+
+```sh
+claude mcp add akari -- akari mcp serve --workspace ~/proj --permission auto-edit
+# akari コマンドを入れていなければ: -- node <Akari の場所>/apps/cli/dist/index.js mcp serve …
+```
+
+| 権限 | 出す道具 |
+|---|---|
+| `read-only`（既定） | `read_file` `list_dir` `glob` `grep` `akari_changes` |
+| `auto-edit` | 上に加えて `write_file` `edit_file` `akari_undo_last` |
+| `full` | 上に加えて `run_command`（Akari の閉じ込めが効く） |
+
+- 相手には Akari の承認画面が無い。だから**出した道具は承認なしで動く**。起動時に、何が承認なしで動くかを標準エラーに出す
+- `delete_file` はどの権限でも出さない。`run_command` でもファイルを消すコマンド（`rm` など）は実行しない
+- 秘密のファイル（`.env` など）は読めない（許可を求める相手がいないため）
+- `akari_changes`: この接続で変えたファイルと差分。`akari_undo_last`: それをまとめて戻す
+- 接続ごとに1つの「実行」として記録され、`akari runs` に「MCP経由」と並ぶ。`akari diff --run <ID>` / `akari undo --run <ID>` も使える
+- **HTTP で出す（`--http`）はまだ無い**。付けると、未実装と言って終わる
+
 ## 文脈の圧縮（`digest` / `recall`）
 
 長い作業で文脈（モデルに一度に渡せる量）が埋まりそうになると、`run` は古いやり取りを
@@ -884,7 +974,6 @@ Windows ではアクセス権を絞れておらず、起動のたびに警告が
 
 | コマンド | 内容 | 予定 |
 |---|---|---|
-| `mcp` | MCPの登録と公開 | P4 |
 | `index` | ベクトル索引 | P5 |
 | `web` | Web検索と取得 | P6 |
 

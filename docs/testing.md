@@ -636,12 +636,12 @@ echo "終了コード: $?"
 ### 10-2. 未実装のコマンド
 
 ```sh
-akari serve
-akari mcp
+akari index
+akari web
 echo "終了コード: $?"
 ```
 
-**期待**: `serve はまだ実装されていません。` のように出て、終了コード2。
+**期待**: `index はまだ実装されていません。` のように出て、終了コード2。
 **あるように見せかけて動かない、が最悪。** そうなっていたら報告してほしい。
 
 ---
@@ -943,7 +943,7 @@ kill $SERVE
 pnpm test:sandbox
 ```
 
-**期待**: `# pass 10` / `# fail 0` / `# skipped 0`。`skipped` が出たら、閉じ込めが使えないと判定された（その行の理由を教えてほしい）。
+**期待**: `# pass 11` / `# fail 0` / `# skipped 0`。`skipped` が出たら、閉じ込めが使えないと判定された（その行の理由を教えてほしい）。
 失敗したら、出力をそのまま貼ってほしい。macOS の規則が外れているのはここで分かる。
 
 次に手で（作業フォルダは使い捨て。ホームの下に作る）:
@@ -963,6 +963,66 @@ akari -m <モデルID> --permission full
 | `run_command で npm --version と git status を実行して` | ふつうに動く |
 
 終わったら `rm -rf ~/akari-sbx-try`。
+
+### 11-10. MCP（P4）
+
+MCP は、モデルに道具を渡すための共通の口。両方向を試す:
+(A) 外部の MCP サーバの道具を Akari に使わせる、(B) Akari の道具を Claude Code から使う。
+
+**A. 外部の道具を使う。** 試し用の模擬サーバ（`tools/mock-mcp-server.mjs`。何も壊さない道具だけ）を登録する。
+`<Akari>` はこのリポジトリの場所。
+
+```sh
+cd ~ && mkdir -p akari-mcp-try && cd akari-mcp-try
+akari mcp add --name mock --command node --arg <Akari>/tools/mock-mcp-server.mjs
+```
+
+| 操作 | 期待 |
+|---|---|
+| 上の `add` | 「次のコマンドがあなたのPCで実行されます」と、コマンド全文と「制限とコマンドの閉じ込めを受けません」が出て、`同意しますか？ [y/N]`。`y` で追加 |
+| `echo n \| akari mcp add --name mock2 --command node --arg x` | 同意の文が出たうえで「確認できない環境です…-y を付けてください」。終了コード3。`akari mcp list` に `mock2` が無い |
+| `akari mcp tools mock` | `mcp__mock__echo  読み取り`、`mcp__mock__touch  実行` など6件 |
+| `akari mcp doctor` | `✓ mock  …ms  道具 6 件` |
+| `akari -m <モデルID>` で `mcp__mock__echo で「こんにちは」を返して` | 承認の枠が出て、「この操作は取り消せません」と書いてある。選択肢に「この実行中は許可」が**無い**。`y` で「mock: echo を実行しました」 |
+| 同じ画面で `/permission full` にしてから、もう一度同じ依頼 | それでも聞かれる（`trust` が `ask` のため） |
+
+設定ファイル（`akari config list` の最初の行の場所。`config.json`）を開き、`mcpServers` の `args` の最後に `"--x"` を足して保存してから:
+
+| 操作 | 期待 |
+|---|---|
+| `akari mcp doctor` | `✗ mock  同意した後に起動する内容が変わっています。akari mcp trust mock で…`、終了コード1 |
+| `akari mcp trust mock` → `y` | 変わった後のコマンドが表示され、同意できる。その後の `doctor` は `✓` |
+
+壊れたサーバが混ざっても作業が止まらないことも見たい:
+
+```sh
+akari mcp add --name broken --command /no/such/command -y
+akari -m <モデルID>
+```
+
+**期待**: 起動直後に `! MCPサーバ「broken」は使いません: コマンドが見つかりません…`。ふつうに会話・作業ができる。
+
+**B. Claude Code から Akari の道具を使う。** Claude Code が入っている場合だけ。
+
+```sh
+mkdir -p ~/akari-mcp-serve && cd ~/akari-mcp-serve && echo 'hello' > a.txt && echo 'API_KEY=dummy' > .env
+claude mcp add akari -- akari mcp serve --workspace ~/akari-mcp-serve --permission auto-edit
+claude
+```
+
+（`claude mcp add` の書式が違ったら、Claude Code 側の説明に合わせてほしい。言いたいのは「`akari mcp serve --workspace … --permission auto-edit` を stdio の MCP サーバとして登録する」こと。）
+
+| Claude Code への依頼 | 期待 |
+|---|---|
+| `akari の道具で a.txt を読んで` | `mcp__akari__read_file`（のような名前）で `hello` が読める |
+| `akari の道具で ../ の外にファイルを書いて` | 「作業フォルダの外です」で断られる。`~/akari-mcp-serve` の外に何もできていない |
+| `akari の道具で .env を読んで` | 「MCP 経由では読めません」で断られ、中身が出ない |
+| `akari の道具で a.txt を bye に書き換えて` → `akari_changes を見せて` | 差分に `+bye` |
+| `akari_undo_last を使って` | 「戻しました: 1 件」。`cat ~/akari-mcp-serve/a.txt` が `hello` |
+| 道具の一覧を見る（`/mcp` など） | `delete_file` と `run_command` が無い |
+
+終わったら Claude Code を閉じ、`akari runs` に `（MCP経由）` の行があることを確かめる。
+片付け: `claude mcp remove akari`、`akari mcp rm mock`、`akari mcp rm broken`、`rm -rf ~/akari-mcp-try ~/akari-mcp-serve`。
 
 ---
 

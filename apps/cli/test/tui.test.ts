@@ -6,7 +6,7 @@ import os from 'node:os';
 import { EventEmitter } from 'node:events';
 import { createElement } from 'react';
 import { render } from 'ink';
-import { ConversationStore, Workspace } from '@akari/core';
+import { ConversationStore, McpHub, Workspace } from '@akari/core';
 import type { ChatEvent, ChatRequest, Provider } from '@akari/core';
 import {
   InputHistory,
@@ -169,6 +169,7 @@ async function agentController(
       forced: null,
       toolsMode: 'native',
       maxSteps: 10,
+      mcp: McpHub.empty(),
     },
     version: 'test',
   });

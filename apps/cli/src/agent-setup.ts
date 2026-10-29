@@ -1,4 +1,6 @@
 import {
+  McpHub,
+  loadCredentials,
   decideToolsMode as decide,
   parsePermission,
   windowTokensFor as windowFor,
@@ -11,13 +13,14 @@ import {
 } from '@akari/core';
 import { persist, type CliContext } from './context.js';
 import { ExitError, EXIT } from './exit.js';
+import { c } from './term.js';
 
 /**
  * CLI 側の下ごしらえ。判断そのものは core（agent/setup.ts）にあり、ハーネスAPIと共有する。
  * ここには、オプションの読み方と、CLI の設定の保存のしかただけを置く。
  */
 
-export { toolNamesFor, type ToolScope, type ToolsModeDecision } from '@akari/core';
+export { toolNamesFor, mcpToolsFor, type ToolScope, type ToolsModeDecision } from '@akari/core';
 
 export function toolScopeOf(opts: { noTools?: boolean; readOnly?: boolean }): ToolScope {
   return opts.noTools ? 'off' : opts.readOnly ? 'read-only' : 'all';
@@ -80,4 +83,23 @@ export function decideToolsMode(
 /** そのモデルの文脈長（判定や --context で分かっていれば）。 */
 export function windowTokensFor(ctx: CliContext, endpointId: string, model: string): number | null {
   return windowFor(ctx.config, endpointId, model);
+}
+
+/**
+ * 登録した MCP サーバへつなぐ（docs/spec/13-mcp.md）。道具を渡さない実行ではつながない。
+ * つなげなかったサーバは hub.notices に理由が入る。閉じるのは呼び出し側。
+ */
+export async function connectMcp(ctx: CliContext, scope: ToolScope, cwd: string): Promise<McpHub> {
+  if (scope === 'off' || !ctx.config.mcpServers.some((s) => s.enabled)) return McpHub.empty();
+  const { credentials } = await loadCredentials(ctx.root);
+  return McpHub.connect(ctx.config.mcpServers, { credentials, logger: ctx.logger, cwd });
+}
+
+/** MCP の知らせを標準エラーへ出す（--json でも出す。使えないサーバを黙って飛ばさない）。 */
+export function printMcpNotices(hub: McpHub): void {
+  for (const n of hub.notices) {
+    process.stderr.write(
+      (n.level === 'warn' ? c.yellow(`! ${n.message}`) : c.dim(n.message)) + '\n',
+    );
+  }
 }

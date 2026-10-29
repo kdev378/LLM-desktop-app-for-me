@@ -7,7 +7,9 @@ import http from 'node:http';
 import { execFileSync } from 'node:child_process';
 import {
   configSchema,
+  mcpServerSchema,
   nullLogger,
+  withConsent,
   saveConfig,
   type ChatEvent,
   type ChatRequest,
@@ -69,6 +71,7 @@ async function setup(
     sandboxMode?: 'auto' | 'required' | 'off';
     root?: string;
     files?: Record<string, string>;
+    mcpServers?: unknown[];
   } = {},
 ) {
   const base = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'akari-srv-')));
@@ -105,6 +108,7 @@ async function setup(
         approvalTimeoutMs: opts.approvalTimeoutMs ?? null,
         sandbox: { mode: opts.sandboxMode ?? 'auto' },
       },
+      mcpServers: opts.mcpServers ?? [],
     });
     await saveConfig(config, root);
   }
@@ -719,4 +723,63 @@ test('transcript を2000字で割っても、コードブロックを壊さな�
   // 割っても中身は欠けない（開き直しのフェンスを除いて元に戻る）
   const joined = chunks.join('\n');
   for (const l of code) assert.ok(joined.includes(l));
+});
+
+// ---------------- MCP（13-mcp.md） ----------------
+
+test('MCP の道具も API の実行で使え、承認には「取り消せません」が出る。tools で名前を挙げたものだけ渡す', async () => {
+  const mock = path.resolve(import.meta.dirname, '../../../tools/mock-mcp-server.mjs');
+  const server = withConsent(
+    mcpServerSchema.parse({
+      id: 'mcp_m',
+      name: 'mock',
+      transport: 'stdio',
+      command: process.execPath,
+      args: [mock],
+    }),
+  );
+  const s = await setup({
+    mcpServers: [server],
+    script: (req, turn) =>
+      turn === 0 ? { tool: 'mcp__mock__echo', args: { text: 'API経由' } } : { text: '済み' },
+  });
+  try {
+    const { runId } = (await s.call('POST', '/v1/runs', { prompt: '呼んで', workspace: s.repo }))
+      .body;
+    await waitFor(async () => (await statusOf(s, runId)).status === 'waiting-approval');
+    const pending = (await statusOf(s, runId)).pendingApproval;
+    assert.equal(pending.name, 'mcp__mock__echo');
+    assert.match(pending.prompt, /この操作は取り消せません/);
+    await s.call('POST', `/v1/runs/${runId}/approvals/${pending.callId}`, { decision: 'allow' });
+    await waitFor(async () => (await statusOf(s, runId)).status === 'done');
+    const tool = s.provider.calls.at(-1)!.messages.find((m) => m.role === 'tool')!;
+    assert.equal(tool.content, 'API経由');
+
+    // 名前を挙げなかった MCP の道具は渡さない。見つからない名前は知らせる
+    const second = (
+      await s.call('POST', '/v1/runs', {
+        prompt: '読むだけ',
+        workspace: s.repo,
+        tools: ['read_file', 'mcp__mock__picture', 'mcp__mock__nope'],
+      })
+    ).body;
+    await waitFor(async () => (await statusOf(s, second.runId)).status === 'done');
+    const sent = s.provider.calls.at(-1)!.tools!.map((t) => t.name);
+    assert.ok(sent.includes('mcp__mock__picture'));
+    assert.ok(!sent.includes('mcp__mock__echo'));
+    const events = await readEvents(
+      `${s.server.url}/v1/runs/${second.runId}/events`,
+      s.server.token,
+    );
+    assert.ok(
+      events.some(
+        (e) =>
+          e.event === 'notice' &&
+          /見つからないため渡しません: mcp__mock__nope/.test(String(e.data.message)),
+      ),
+      JSON.stringify(events.filter((e) => e.event === 'notice')),
+    );
+  } finally {
+    await s.server.close();
+  }
 });

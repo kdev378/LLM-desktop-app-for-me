@@ -11,7 +11,6 @@ import {
   type ToolLimits,
   type ToolSpec,
   type ToolPreview,
-  type Risk,
 } from '../tools/types.js';
 import { buildSystemPrompt, loadInstructionFiles, extractPromptedCalls } from './prompt.js';
 import {
@@ -62,6 +61,11 @@ export type SessionOptions = {
   permissionMode?: PermissionMode;
   /** 使うツール名。省略で標準一式。 */
   toolNames?: string[];
+  /**
+   * 標準の外の道具（MCP サーバの道具。docs/spec/13-mcp.md）。toolNames で選ぶ対象ではない。
+   * 道具を渡さない実行（toolNames が空）には足さない。
+   */
+  extraTools?: ToolSpec[];
   maxSteps?: number;
   limits?: Partial<ToolLimits>;
   /**
@@ -166,6 +170,7 @@ export type SessionReconfig = {
   model?: string;
   permissionMode?: PermissionMode;
   toolNames?: string[];
+  extraTools?: ToolSpec[];
   toolsMode?: ToolsMode;
   /** null で既定（送らない）に戻す。 */
   reasoning?: ReasoningLevel | null;
@@ -303,6 +308,7 @@ export class Session {
       this.unknownTools = unknown;
       this.opts.toolNames = patch.toolNames;
     }
+    if (patch.extraTools !== undefined) this.opts.extraTools = patch.extraTools;
     if (patch.toolsMode !== undefined) this.opts.toolsMode = patch.toolsMode;
     if (patch.reasoning !== undefined) {
       if (patch.reasoning === null) delete this.opts.reasoning;
@@ -408,7 +414,7 @@ export class Session {
       model: this.opts.model,
       permissionMode: this.opts.permissionMode,
       instructionFiles: instructions.map((i) => i.name),
-      toolNames: this.tools.map((t) => t.name),
+      toolNames: this.passedTools().map((t) => t.name),
       toolsMode,
       ...(this.opts.conversationId ? { conversationId: this.opts.conversationId } : {}),
       ...(usesCommands && this.sandboxStatus ? { sandbox: this.sandboxStatus } : {}),
@@ -816,7 +822,7 @@ export class Session {
       }
     }
 
-    const need = this.needsApproval(tool.risk, tool.name, args);
+    const need = this.needsApproval(tool, args);
     if (need.required) {
       const decision = yield* this.askApproval(call, tool, preview, need.scope, need.reason);
       yield { type: 'approval-resolved', callId: call.id, decision };
@@ -926,7 +932,7 @@ export class Session {
       type: 'notice',
       level: 'warn',
       message:
-        '断られた操作があったため、この実行の残りではコマンドを自動で実行しません（承認を求めます）。',
+        '断られた操作があったため、この実行の残りではコマンドを自動で実行しません（承認を求めます。MCP の実行系の道具も同じ）。',
     };
   }
 
@@ -935,12 +941,12 @@ export class Session {
    * delete_file は full でも必ず聞く。
    */
   private needsApproval(
-    risk: Risk,
-    name: string,
+    tool: ToolSpec,
     args: unknown,
   ): { required: boolean; scope: string | null; reason?: string } {
+    const { risk, name } = tool;
     const mode = this.opts.permissionMode;
-    const scope = this.scopeFor(name, args);
+    const scope = this.scopeFor(tool, args);
 
     // 削除系のコマンドは、どのモードでも毎回聞く（allow-session にもしない）。
     // コマンドで消したものは記録の外で、undo で戻せないため。
@@ -959,6 +965,8 @@ export class Session {
 
     if (scope && this.sessionAllows.has(scope)) return { required: false, scope };
 
+    if (tool.mcp) return this.mcpApproval(tool, scope);
+
     // 一度断った後は、コマンドを自動で通さない（断られた後の迂回を止める）
     if (name === 'run_command' && this.refusedInRun) {
       return {
@@ -975,7 +983,34 @@ export class Session {
     return { required: mode !== 'full', scope };
   }
 
-  private scopeFor(name: string, args: unknown): string | null {
+  /**
+   * MCP の道具の承認。trust と権限モードの厳しいほう（docs/spec/13-mcp.md「危険度の決め方」）。
+   * trust が通さなければ、権限モードが full でも聞く。
+   */
+  private mcpApproval(
+    tool: ToolSpec,
+    scope: string | null,
+  ): { required: boolean; scope: string | null; reason?: string } {
+    const mcp = tool.mcp!;
+    const trusted = mcp.trust === 'full' || (mcp.trust === 'readOnly' && mcp.readOnlyHint);
+    // trust: ask は文字どおり毎回聞く（「この実行中は許可」も出さない）
+    if (!trusted) return { required: true, scope: null };
+    if (tool.risk === 'read') return { required: false, scope };
+    // 一度断った後は、何をするか分からない道具を自動で通さない（コマンドと同じ）
+    if (this.refusedInRun) {
+      return {
+        required: true,
+        scope,
+        reason: 'この実行で一度断られた操作があったため、MCPの道具は自動では実行しません。',
+      };
+    }
+    return { required: this.opts.permissionMode !== 'full', scope };
+  }
+
+  private scopeFor(tool: ToolSpec, args: unknown): string | null {
+    const name = tool.name;
+    // MCP の道具は、何が対象かを Akari が知らない。「この実行中は許可」は道具ごと
+    if (tool.mcp) return `mcp:${name}`;
     if (name === 'run_command') {
       const command = (args as { command?: unknown }).command;
       return typeof command === 'string' ? `command:${commandScope(command)}` : null;
@@ -991,10 +1026,16 @@ export class Session {
   private activeTools(): ToolSpec[] {
     if (this.tools.length === 0) return this.tools;
     return [
-      ...this.tools,
+      ...this.passedTools(),
       ...(this.compaction !== null ? RECALL_TOOLS : []),
       ...(this.offerSecretAccess ? [requestSecretAccessTool] : []),
     ];
+  }
+
+  /** 選んだ道具と、標準の外の道具（MCP）。道具を渡さない実行には外の道具も足さない。 */
+  private passedTools(): ToolSpec[] {
+    if (this.tools.length === 0) return this.tools;
+    return [...this.tools, ...(this.opts.extraTools ?? [])];
   }
 
   /** 送るものを組み立てる。圧縮していれば圧縮版を足し、圧縮した生の記録は送らない。 */

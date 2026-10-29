@@ -32,6 +32,8 @@ export type JournalFile = {
   runId: string;
   workspace: string;
   startedAt: string;
+  /** どこから来た変更か。無ければ Akari 自身の実行。'mcp' は akari mcp serve 経由（13-mcp.md）。後から足した任意の項目。 */
+  origin?: 'mcp';
   changes: FileChange[];
 };
 
@@ -67,7 +69,12 @@ export class ChangeJournal {
     this.seq = data.changes.length;
   }
 
-  static async create(runId: string, workspace: string, root?: string): Promise<ChangeJournal> {
+  static async create(
+    runId: string,
+    workspace: string,
+    root?: string,
+    origin?: JournalFile['origin'],
+  ): Promise<ChangeJournal> {
     const dir = path.join(paths.backups(root), runId);
     await ensureDir(dir);
     const data: JournalFile = {
@@ -75,6 +82,7 @@ export class ChangeJournal {
       runId,
       workspace,
       startedAt: new Date().toISOString(),
+      ...(origin ? { origin } : {}),
       changes: [],
     };
     const journal = new ChangeJournal(runId, dir, data);
@@ -114,6 +122,10 @@ export class ChangeJournal {
 
   get startedAt(): string {
     return this.data.startedAt;
+  }
+
+  get origin(): JournalFile['origin'] {
+    return this.data.origin;
   }
 
   /**

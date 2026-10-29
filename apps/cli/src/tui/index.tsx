@@ -10,6 +10,7 @@ import {
 } from '../context.js';
 import { chooseConversation } from '../conversation.js';
 import {
+  connectMcp,
   decideToolsMode,
   resolvePermission,
   resolveToolsModeOption,
@@ -17,7 +18,7 @@ import {
   toolScopeOf,
 } from '../agent-setup.js';
 import { ExitError, EXIT } from '../exit.js';
-import { setNotes } from '../term.js';
+import { note, setNotes } from '../term.js';
 import { VERSION } from '../version.js';
 import { App } from './App.js';
 import { Controller, type AgentSetup, type ChatSetup } from './controller.js';
@@ -91,6 +92,12 @@ export async function interactiveCommand(opts: InteractiveOptions): Promise<void
     if (!Number.isInteger(maxSteps) || maxSteps < 1 || maxSteps > 200) {
       throw new ExitError(EXIT.usage, '--max-steps は 1〜200 の整数で指定してください。');
     }
+    // MCP サーバは画面を閉じるまでつないでおく（13-mcp.md「起動と生存」）
+    if (scope !== 'off' && ctx.config.mcpServers.some((s) => s.enabled)) {
+      note('MCP サーバへつないでいます…');
+    }
+    const mcp = await connectMcp(ctx, scope, workspace.root);
+    startupNotes.push(...mcp.notices.map((n) => `! ${n.message}`));
     setup = {
       kind: 'agent',
       workspace,
@@ -99,6 +106,7 @@ export async function interactiveCommand(opts: InteractiveOptions): Promise<void
       forced,
       toolsMode: decision.effective,
       maxSteps,
+      mcp,
     };
   } else {
     setup = {
@@ -141,5 +149,6 @@ export async function interactiveCommand(opts: InteractiveOptions): Promise<void
   });
   await app.waitUntilExit();
   controller.abort();
+  if (setup.kind === 'agent') await setup.mcp.close();
   process.stdout.write(`${controller.farewell()}\n`);
 }

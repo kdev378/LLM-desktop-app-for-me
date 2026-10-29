@@ -83,7 +83,7 @@ HTTP から頼める権限は、設定で決めた範囲までに限る。**API 
   "model": "qwen2.5-coder:14b",
   "permissionMode": "ask",            // ask | autoEdit | full
   "maxSteps": 25,
-  "tools": ["read_file", "edit_file", "run_command"],  // 省略時は既定一式
+  "tools": ["read_file", "edit_file", "run_command"],  // 省略時は既定一式 + MCP の道具全部。mcp__… の名前も書ける（13-mcp.md）
   "conversationId": "01J…",           // 続きから始める場合
   "labels": { "channel": "1234", "agent": "実装役A" },  // 相関用。自由
   "git": { "worktree": true, "branch": "akari/agent-a" }, // 下記

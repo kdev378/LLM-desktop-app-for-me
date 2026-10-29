@@ -266,16 +266,19 @@ P3 で外部のエージェントが `full` のまま無人で走らせられる
 
 ---
 
-## P4 — MCP（使う側 / なる側）
+## P4 — MCP（使う側 / なる側）【部分完了。なる側の HTTP は未実装】
 
-`13-mcp.md`。**実装前に MCP の最新仕様を一次資料で確認する。**
+`13-mcp.md`。**実装前に MCP の最新仕様を一次資料で確認する。**（2026-10-29、公式 SDK v2.3.1 とプロトコル 2025-11-25 で確認）
 
 作るもの:
-- `core/mcp`: stdio / http クライアント、`tools/list`、`tools/call`
-- ツール名の名前空間と衝突の解決
-- 危険度の既定を `execute` にする扱いと、`trust` の3段階
-- `apps/server` に MCPサーバ側（stdio / http）
-- CLI の `akari mcp add/list/tools/rm/doctor/serve`
+- [x] `core/mcp`: stdio / http クライアント、`tools/list`（続きのページも）、`tools/call`
+- [x] ツール名の名前空間と衝突の解決
+- [x] 危険度の既定を `execute` にする扱いと、`trust` の3段階
+- [x] 起動する内容の同意（指紋）。変わったら同意し直すまで起動しない
+- [x] 認証は `none` / `bearer`。OAuth を後から足す口（`core/mcp/auth.ts`）
+- [x] `apps/server` に MCPサーバ側（**stdio**）
+- [ ] `apps/server` に MCPサーバ側（**http**）— 未実装。守り（Host / Origin / トークン）の設計とともに後で
+- [x] CLI の `akari mcp add/list/tools/trust/rm/doctor/serve`
 
 確かめ方:
 ```sh
@@ -284,13 +287,16 @@ akari mcp tools fs
 akari "docs の中身を要約して"      # mcp__fs__* が使われる
 ```
 
-検証すること:
-- [ ] 起動に失敗したMCPサーバがあっても、他のツールで作業が続く
-- [ ] MCPツールも承認を通る。`trust: ask` では毎回聞く
-- [ ] MCPツールの承認画面に「取り消せない」と出る
-- [ ] 登録時にコマンドを見せて同意を取る。設定を手書きした場合も初回に聞く
-- [ ] 中断時にMCPの子プロセスが残らない
-- [ ] `akari mcp serve` に Claude Code から繋いで、パス境界と取り消しが効く
+検証すること（`testing.md` 11-10）:
+- [x] 起動に失敗したMCPサーバがあっても、他のツールで作業が続く（自動テスト。存在しないコマンド・すぐ落ちる・起動が遅い）
+- [x] MCPツールも承認を通る。`trust: ask` では毎回聞く（自動テスト、対話画面を疑似端末で）
+- [x] MCPツールの承認画面に「取り消せない」と出る（自動テスト、対話画面を疑似端末で）
+- [x] 登録時にコマンドを見せて同意を取る。設定を手書き・書き換えした場合も起動前に止まる（自動テスト・CLI の通し）
+- [x] 閉じたとき・起動に失敗したときに、MCPの子プロセスが孫まで残らない（自動テスト。Linux のみ）
+- [x] `akari mcp serve` にMCPの使う側からつないで、パス境界と取り消しが効く（Akari 自身の使う側からの自動テスト）
+- [ ] **`akari mcp serve` に Claude Code から繋ぐ（未実施。`testing.md` 11-10 B）**
+- [ ] **本物の MCP サーバ（`@modelcontextprotocol/server-filesystem` など）と、実モデルでの通し（未実施）**
+- [ ] **macOS / Windows で子プロセスが残らないこと（未実施）**
 
 ---
 

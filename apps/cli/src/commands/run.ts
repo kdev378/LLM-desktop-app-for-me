@@ -21,7 +21,10 @@ import { c, out, write, note, isInteractive, formatDuration } from '../term.js';
 import { ExitError, EXIT } from '../exit.js';
 import { chooseConversation } from '../conversation.js';
 import {
+  connectMcp,
   decideToolsMode,
+  mcpToolsFor,
+  printMcpNotices,
   resolvePermission,
   resolveToolsModeOption,
   toolNamesFor,
@@ -90,7 +93,8 @@ export async function runCommand(promptArgs: string[], opts: RunOptions): Promis
     (await provider.listModels()).map((m) => m.id),
   );
 
-  const toolNames = toolNamesFor(toolScopeOf(opts));
+  const scope = toolScopeOf(opts);
+  const toolNames = toolNamesFor(scope);
   const forced = resolveToolsModeOption(opts, ctx.config.agent.toolsMode);
   const toolsMode = await decideToolsMode(ctx, endpoint, provider, model, toolNames, forced);
   if (!ctx.json && !ctx.quiet) {
@@ -116,229 +120,244 @@ export async function runCommand(promptArgs: string[], opts: RunOptions): Promis
     settings: { endpointId: endpoint.id, model },
   });
 
-  const session = Session.create({
-    provider,
-    model,
-    workspace,
-    transcript: conversation.transcript,
-    // 文脈の管理（docs/spec/16-context.md）。文脈長はモデルごとの判定結果から
-    context: {
-      settings: ctx.config.context,
-      windowTokens,
-      endpointId: endpoint.id,
-    },
-    ...(conversation.source?.latestCompaction()
-      ? { compaction: conversation.source.latestCompaction()! }
-      : {}),
-    ...(conversation.target
-      ? {
-          recorder: conversation.target.recorder({ model, endpointId: endpoint.id }),
-          conversationId: conversation.target.id,
-        }
-      : {}),
-    permissionMode,
-    toolNames,
-    maxSteps,
-    toolsMode: effectiveMode,
-    sandbox: ctx.config.agent.sandbox,
-    ...(reasoning ? { reasoning } : {}),
-    limits: {
-      commandTimeoutMs: ctx.config.agent.commandTimeoutMs,
-      toolOutputLimitBytes: ctx.config.agent.toolOutputLimitBytes,
-      deniedCommands: ctx.config.agent.deniedCommands,
-    },
-    logger: ctx.logger,
-  });
-
-  const interactive = isInteractive();
-  let interrupted = false;
-  const onSigint = () => {
-    if (interrupted) process.exit(EXIT.interrupted);
-    interrupted = true;
-    if (!ctx.json) out(c.yellow('\n中断しています…（もう一度 Ctrl+C で即座に終了）'));
-    session.abort();
-  };
-  process.on('SIGINT', onSigint);
-
-  // 代替方式では、本文に混ざるブロックを画面から隠す（内容は tool-call 行に出る）
-  const blockFilter = toolsMode.mode === 'prompted' && !ctx.json ? createBlockFilter() : null;
-
-  const started = Date.now();
-  let deniedForNonInteractive = false;
-  let endReason: string = 'done';
-  let lastWasText = false;
-
+  // MCP サーバは、この実行の間だけつなぐ（docs/spec/13-mcp.md「起動と生存」）
+  const mcp = await connectMcp(ctx, scope, workspace.root);
+  printMcpNotices(mcp);
   try {
-    for await (const ev of session.send(prompt)) {
-      if (ctx.json) {
-        out(JSON.stringify({ ts: new Date().toISOString(), ...ev }));
-      }
-      switch (ev.type) {
-        case 'run-start':
-          if (!ctx.json && !ctx.quiet) {
-            out(
-              c.dim(
-                `${endpoint.name} / ${model}  ${ev.workspace}  権限: ${describeMode(permissionMode)}  ツール: ${describeTools(opts, ev.toolNames.length)}${ev.toolNames.length > 0 ? ` / ${describeToolsMode(ev.toolsMode)}` : ''}`,
-              ),
-            );
-            if (ev.toolNames.length === 0) {
+    await runSession();
+  } finally {
+    await mcp.close();
+  }
+
+  async function runSession(): Promise<void> {
+    const session = Session.create({
+      provider,
+      model,
+      workspace,
+      transcript: conversation.transcript,
+      // 文脈の管理（docs/spec/16-context.md）。文脈長はモデルごとの判定結果から
+      context: {
+        settings: ctx.config.context,
+        windowTokens,
+        endpointId: endpoint.id,
+      },
+      ...(conversation.source?.latestCompaction()
+        ? { compaction: conversation.source.latestCompaction()! }
+        : {}),
+      ...(conversation.target
+        ? {
+            recorder: conversation.target.recorder({ model, endpointId: endpoint.id }),
+            conversationId: conversation.target.id,
+          }
+        : {}),
+      permissionMode,
+      toolNames,
+      extraTools: mcpToolsFor(mcp.tools, scope),
+      maxSteps,
+      toolsMode: effectiveMode,
+      sandbox: ctx.config.agent.sandbox,
+      ...(reasoning ? { reasoning } : {}),
+      limits: {
+        commandTimeoutMs: ctx.config.agent.commandTimeoutMs,
+        toolOutputLimitBytes: ctx.config.agent.toolOutputLimitBytes,
+        deniedCommands: ctx.config.agent.deniedCommands,
+      },
+      logger: ctx.logger,
+    });
+
+    const interactive = isInteractive();
+    let interrupted = false;
+    const onSigint = () => {
+      if (interrupted) process.exit(EXIT.interrupted);
+      interrupted = true;
+      if (!ctx.json) out(c.yellow('\n中断しています…（もう一度 Ctrl+C で即座に終了）'));
+      session.abort();
+    };
+    process.on('SIGINT', onSigint);
+
+    // 代替方式では、本文に混ざるブロックを画面から隠す（内容は tool-call 行に出る）
+    const blockFilter = toolsMode.mode === 'prompted' && !ctx.json ? createBlockFilter() : null;
+
+    const started = Date.now();
+    let deniedForNonInteractive = false;
+    let endReason: string = 'done';
+    let lastWasText = false;
+
+    try {
+      for await (const ev of session.send(prompt)) {
+        if (ctx.json) {
+          out(JSON.stringify({ ts: new Date().toISOString(), ...ev }));
+        }
+        switch (ev.type) {
+          case 'run-start':
+            if (!ctx.json && !ctx.quiet) {
               out(
-                c.yellow(
-                  'ツールを渡していないため、ファイルの読み書きとコマンド実行はできません。',
+                c.dim(
+                  `${endpoint.name} / ${model}  ${ev.workspace}  権限: ${describeMode(permissionMode)}  ツール: ${describeTools(opts, ev.toolNames)}${ev.toolNames.length > 0 ? ` / ${describeToolsMode(ev.toolsMode)}` : ''}`,
                 ),
               );
-              out(c.dim('ファイルを触らせるには --no-tools を外してください。'));
-            }
-            if (ev.sandbox) out(c.dim(`コマンド: ${describeSandbox(ev.sandbox)}`));
-            if (ev.instructionFiles.length > 0)
-              out(c.dim(`指示ファイル: ${ev.instructionFiles.join(', ')}`));
-            out(c.dim(describeConversation(conversation)));
-            if (ev.toolNames.length > 0)
-              out(c.dim(describeContext(ctx.config.context, windowTokens)));
-            out('');
-          }
-          break;
-        case 'text-delta': {
-          if (ctx.json) break;
-          const shown = blockFilter ? blockFilter.feed(ev.text) : ev.text;
-          if (shown !== '') {
-            write(shown);
-            lastWasText = true;
-          }
-          break;
-        }
-        case 'tool-call':
-          if (!ctx.json) {
-            if (blockFilter) {
-              const rest = blockFilter.flush();
-              if (rest.trim() !== '') write(rest);
-            }
-            if (lastWasText) {
+              if (ev.toolNames.length === 0) {
+                out(
+                  c.yellow(
+                    'ツールを渡していないため、ファイルの読み書きとコマンド実行はできません。',
+                  ),
+                );
+                out(c.dim('ファイルを触らせるには --no-tools を外してください。'));
+              }
+              if (ev.sandbox) out(c.dim(`コマンド: ${describeSandbox(ev.sandbox)}`));
+              if (ev.instructionFiles.length > 0)
+                out(c.dim(`指示ファイル: ${ev.instructionFiles.join(', ')}`));
+              out(c.dim(describeConversation(conversation)));
+              if (ev.toolNames.length > 0)
+                out(c.dim(describeContext(ctx.config.context, windowTokens)));
               out('');
-              lastWasText = false;
             }
-            out(c.cyan(`  ${ev.name}`) + c.dim(` ${summarizeArgs(ev.args)}`));
-          }
-          break;
-        case 'tool-output':
-          if (!ctx.json && !ctx.quiet) write(c.dim(indentBlock(ev.text)));
-          break;
-        case 'tool-result':
-          if (!ctx.json) {
-            out(ev.ok ? c.green(`    ✓ ${ev.summary}`) : c.red(`    ✗ ${ev.summary}`));
-          }
-          break;
-        case 'approval-request': {
-          if (!interactive) {
-            // パイプの中で勝手にファイルを書かない
-            deniedForNonInteractive = true;
-            session.approve(ev.callId, {
-              kind: 'deny',
-              feedback: '対話できない環境のため自動で拒否しました',
-            });
-            if (!ctx.json)
-              out(c.yellow(`    ! 承認が必要ですが対話できないため拒否しました（${ev.name}）`));
+            break;
+          case 'text-delta': {
+            if (ctx.json) break;
+            const shown = blockFilter ? blockFilter.feed(ev.text) : ev.text;
+            if (shown !== '') {
+              write(shown);
+              lastWasText = true;
+            }
             break;
           }
-          const decision = await askApproval(ev);
-          session.approve(ev.callId, decision);
-          break;
-        }
-        case 'compaction-start':
-          if (!ctx.json) {
-            if (lastWasText) {
-              out('');
-              lastWasText = false;
+          case 'tool-call':
+            if (!ctx.json) {
+              if (blockFilter) {
+                const rest = blockFilter.flush();
+                if (rest.trim() !== '') write(rest);
+              }
+              if (lastWasText) {
+                out('');
+                lastWasText = false;
+              }
+              out(c.cyan(`  ${ev.name}`) + c.dim(` ${summarizeArgs(ev.args)}`));
             }
-            out(
-              c.magenta(
-                `  ⧉ 文脈が約${ev.beforeTokens.toLocaleString()}トークン${ev.estimated ? '（概算）' : ''}になったため、古い ${ev.turns} 手を圧縮しています…`,
-              ),
-            );
+            break;
+          case 'tool-output':
+            if (!ctx.json && !ctx.quiet) write(c.dim(indentBlock(ev.text)));
+            break;
+          case 'tool-result':
+            if (!ctx.json) {
+              out(ev.ok ? c.green(`    ✓ ${ev.summary}`) : c.red(`    ✗ ${ev.summary}`));
+            }
+            break;
+          case 'approval-request': {
+            if (!interactive) {
+              // パイプの中で勝手にファイルを書かない
+              deniedForNonInteractive = true;
+              session.approve(ev.callId, {
+                kind: 'deny',
+                feedback: '対話できない環境のため自動で拒否しました',
+              });
+              if (!ctx.json)
+                out(c.yellow(`    ! 承認が必要ですが対話できないため拒否しました（${ev.name}）`));
+              break;
+            }
+            const decision = await askApproval(ev);
+            session.approve(ev.callId, decision);
+            break;
           }
-          break;
-        case 'compaction-end':
-          if (!ctx.json) {
-            out(
-              c.magenta(
-                `  ⧉ 圧縮しました: 約${ev.afterTokens.toLocaleString()}トークン${ev.estimated ? '（概算）' : ''}。中身は akari digest で見られます`,
-              ),
-            );
-            if (ev.fallback)
+          case 'compaction-start':
+            if (!ctx.json) {
+              if (lastWasText) {
+                out('');
+                lastWasText = false;
+              }
               out(
-                c.yellow(
-                  '    ! モデルが圧縮版を書けなかった分は、機械的な要約で残しています（劣った圧縮です）。',
+                c.magenta(
+                  `  ⧉ 文脈が約${ev.beforeTokens.toLocaleString()}トークン${ev.estimated ? '（概算）' : ''}になったため、古い ${ev.turns} 手を圧縮しています…`,
                 ),
               );
-          }
-          break;
-        case 'notice':
-          if (!ctx.json)
-            out(ev.level === 'warn' ? c.yellow(`  ! ${ev.message}`) : c.dim(`  ${ev.message}`));
-          break;
-        case 'run-end': {
-          endReason = ev.reason;
-          if (!ctx.json) {
-            if (blockFilter) {
-              const rest = blockFilter.flush();
-              if (rest.trim() !== '') write(rest);
             }
-            if (lastWasText) out('');
-            out('');
-            out(c.dim(`${describeEnd(ev.reason)}  ${formatDuration(Date.now() - started)}`));
-            if (ev.changedFiles.length > 0) {
-              out(c.dim(`変更したファイル (${ev.changedFiles.length}):`));
-              for (const f of ev.changedFiles) out(c.dim(`  ${f}`));
-              out(c.dim(`元に戻すには: akari undo --run ${session.runId}`));
+            break;
+          case 'compaction-end':
+            if (!ctx.json) {
+              out(
+                c.magenta(
+                  `  ⧉ 圧縮しました: 約${ev.afterTokens.toLocaleString()}トークン${ev.estimated ? '（概算）' : ''}。中身は akari digest で見られます`,
+                ),
+              );
+              if (ev.fallback)
+                out(
+                  c.yellow(
+                    '    ! モデルが圧縮版を書けなかった分は、機械的な要約で残しています（劣った圧縮です）。',
+                  ),
+                );
             }
-            if (ev.error)
-              out(c.red(`エラー: ${typeof ev.error === 'string' ? ev.error : ev.error.message}`));
-            if (conversation.target && !ctx.quiet)
-              out(c.dim(`続けるには: akari run -c "…"  （会話 ${conversation.target.id}）`));
+            break;
+          case 'notice':
+            if (!ctx.json)
+              out(ev.level === 'warn' ? c.yellow(`  ! ${ev.message}`) : c.dim(`  ${ev.message}`));
+            break;
+          case 'run-end': {
+            endReason = ev.reason;
+            if (!ctx.json) {
+              if (blockFilter) {
+                const rest = blockFilter.flush();
+                if (rest.trim() !== '') write(rest);
+              }
+              if (lastWasText) out('');
+              out('');
+              out(c.dim(`${describeEnd(ev.reason)}  ${formatDuration(Date.now() - started)}`));
+              if (ev.changedFiles.length > 0) {
+                out(c.dim(`変更したファイル (${ev.changedFiles.length}):`));
+                for (const f of ev.changedFiles) out(c.dim(`  ${f}`));
+                out(c.dim(`元に戻すには: akari undo --run ${session.runId}`));
+              }
+              if (ev.error)
+                out(c.red(`エラー: ${typeof ev.error === 'string' ? ev.error : ev.error.message}`));
+              if (conversation.target && !ctx.quiet)
+                out(c.dim(`続けるには: akari run -c "…"  （会話 ${conversation.target.id}）`));
+            }
+            break;
           }
-          break;
+          default:
+            break;
         }
-        default:
-          break;
       }
+    } finally {
+      process.off('SIGINT', onSigint);
     }
-  } finally {
-    process.off('SIGINT', onSigint);
-  }
 
-  if (deniedForNonInteractive) {
-    throw new ExitError(EXIT.denied, '承認が得られなかったため、一部の操作を行いませんでした。', {
-      // full でも聞く操作（削除、断られた後のコマンド）がある。そこで「full にして」と言わない
-      hint:
-        permissionMode === 'full'
-          ? '削除・秘密のファイルの読み取り・断られた後のコマンドは、full でも確認が要ります。対話できる端末で実行してください。'
-          : '自動で進めるには --permission auto-edit などを明示してください。',
-      silent: ctx.json,
-    });
+    if (deniedForNonInteractive) {
+      throw new ExitError(EXIT.denied, '承認が得られなかったため、一部の操作を行いませんでした。', {
+        // full でも聞く操作（削除、断られた後のコマンド）がある。そこで「full にして」と言わない
+        hint:
+          permissionMode === 'full'
+            ? '削除・秘密のファイルの読み取り・断られた後のコマンド・trust が ask の MCP の道具は、full でも確認が要ります。対話できる端末で実行してください。'
+            : '自動で進めるには --permission auto-edit などを明示してください。',
+        silent: ctx.json,
+      });
+    }
+    if (endReason === 'aborted')
+      throw new ExitError(EXIT.interrupted, '中断しました。', { silent: true });
+    if (endReason === 'max-steps') {
+      throw new ExitError(EXIT.maxSteps, `ステップ上限（${maxSteps}）に達しました。`, {
+        hint: '--max-steps を増やすか、目的を分けてください。',
+        silent: ctx.json,
+      });
+    }
+    // 作業は終わっていない。スクリプトから成功に見えないよう、ステップ上限と同じ「途中で止まった」扱い
+    if (endReason === 'loop') {
+      throw new ExitError(EXIT.maxSteps, '同じ操作を繰り返したため、途中で止めました。', {
+        hint: '指示を具体的にするか、別のモデルで試してください。',
+        silent: ctx.json,
+      });
+    }
+    if (endReason === 'error' || endReason === 'context-full')
+      throw new ExitError(EXIT.runtime, '実行が失敗しました。', { silent: true });
   }
-  if (endReason === 'aborted')
-    throw new ExitError(EXIT.interrupted, '中断しました。', { silent: true });
-  if (endReason === 'max-steps') {
-    throw new ExitError(EXIT.maxSteps, `ステップ上限（${maxSteps}）に達しました。`, {
-      hint: '--max-steps を増やすか、目的を分けてください。',
-      silent: ctx.json,
-    });
-  }
-  // 作業は終わっていない。スクリプトから成功に見えないよう、ステップ上限と同じ「途中で止まった」扱い
-  if (endReason === 'loop') {
-    throw new ExitError(EXIT.maxSteps, '同じ操作を繰り返したため、途中で止めました。', {
-      hint: '指示を具体的にするか、別のモデルで試してください。',
-      silent: ctx.json,
-    });
-  }
-  if (endReason === 'error' || endReason === 'context-full')
-    throw new ExitError(EXIT.runtime, '実行が失敗しました。', { silent: true });
 }
 
-function describeTools(opts: RunOptions, count: number): string {
+function describeTools(opts: RunOptions, names: string[]): string {
   if (opts.noTools) return 'なし（--no-tools）';
-  if (opts.readOnly) return `読み取りのみ ${count}種（--read-only）`;
-  return `${count}種`;
+  const mcp = names.filter((n) => n.startsWith('mcp__')).length;
+  const own = names.length - mcp;
+  const tail = mcp > 0 ? ` + MCP ${mcp}種` : '';
+  if (opts.readOnly) return `読み取りのみ ${own}種${tail}（--read-only）`;
+  return `${own}種${tail}`;
 }
 
 function describeConversation(conv: Awaited<ReturnType<typeof chooseConversation>>): string {

@@ -10,6 +10,7 @@ import {
   type Provider,
   type ReasoningLevel,
   type ResolvedEndpoint,
+  type McpHub,
   type RunEvent,
   type ToolsMode,
 } from '@akari/core';
@@ -18,6 +19,7 @@ import { ExitError } from '../exit.js';
 import { chooseConversation, safeSaver, type ConversationChoice } from '../conversation.js';
 import {
   decideToolsMode,
+  mcpToolsFor,
   parsePermission,
   toolNamesFor,
   windowTokensFor,
@@ -107,6 +109,8 @@ export type AgentSetup = {
   forced: ToolsMode | null;
   toolsMode: ToolsMode;
   maxSteps: number;
+  /** つないだ MCP サーバ（画面を閉じるまで保つ）。道具なしで起動したときは空。 */
+  mcp: McpHub;
 };
 
 export type ChatSetup = {
@@ -397,6 +401,7 @@ export class Controller {
         : {}),
       permissionMode: setup.permission,
       toolNames: toolNamesFor(setup.scope),
+      extraTools: mcpToolsFor(setup.mcp.tools, setup.scope),
       maxSteps: setup.maxSteps,
       toolsMode: setup.toolsMode,
       sandbox: this.ctx.config.agent.sandbox,
@@ -787,11 +792,13 @@ export class Controller {
   private describeScope(): string {
     if (this.setup.kind !== 'agent') return 'なし';
     const n = toolNamesFor(this.setup.scope).length;
+    const m = mcpToolsFor(this.setup.mcp.tools, this.setup.scope).length;
+    const tail = m > 0 ? ` + MCP ${m}種` : '';
     return this.setup.scope === 'off'
       ? 'なし'
       : this.setup.scope === 'read-only'
-        ? `読み取りのみ ${n}種`
-        : `${n}種`;
+        ? `読み取りのみ ${n}種${tail}`
+        : `${n}種${tail}`;
   }
 
   private computeStatus(): Status {
@@ -1042,9 +1049,25 @@ export class Controller {
       }
     }
     setup.scope = arg;
-    this.session!.reconfigure({ toolNames: names, toolsMode: setup.toolsMode });
+    this.session!.reconfigure({
+      toolNames: names,
+      extraTools: mcpToolsFor(setup.mcp.tools, arg),
+      toolsMode: setup.toolsMode,
+    });
     this.update({ status: this.computeStatus() });
     this.pushLines([line(`道具を「${this.describeScope()}」にしました。`, 'dim')]);
+    if (
+      arg !== 'off' &&
+      setup.mcp.statuses.length === 0 &&
+      this.ctx.config.mcpServers.some((s) => s.enabled)
+    ) {
+      this.pushLines([
+        line(
+          '  MCP サーバは道具なしで起動したためつないでいません。使うには起動し直してください。',
+          'dim',
+        ),
+      ]);
+    }
   }
 
   private contextCommand(): void {

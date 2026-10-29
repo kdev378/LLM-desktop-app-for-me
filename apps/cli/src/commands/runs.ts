@@ -44,6 +44,7 @@ export async function runsCommand(opts: GlobalOptions & { limit?: string }): Pro
       startedAt: j.startedAt,
       workspace: j.workspace,
       changedFiles: j.changedFiles(),
+      ...(j.origin ? { origin: j.origin } : {}),
     });
   }
 
@@ -60,7 +61,9 @@ export async function runsCommand(opts: GlobalOptions & { limit?: string }): Pro
       rows.map((r) => [
         String(r.runId),
         String(r.startedAt).replace('T', ' ').slice(0, 19),
-        String((r.changedFiles as string[]).length) + ' 件',
+        String((r.changedFiles as string[]).length) +
+          ' 件' +
+          (r.origin === 'mcp' ? '（MCP経由）' : ''),
         String(r.workspace),
       ]),
       ['実行ID', '開始', '変更', '作業フォルダ'],

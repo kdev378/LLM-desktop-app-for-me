@@ -4,6 +4,7 @@ import type { Config } from '../config/schema.js';
 import type { ResolvedEndpoint } from '../config/endpoints.js';
 import type { Provider } from '../provider/types.js';
 import { ALL_TOOL_NAMES, READ_ONLY_TOOL_NAMES } from '../tools/registry.js';
+import type { ToolSpec } from '../tools/types.js';
 import type { PermissionMode, ToolsMode } from './events.js';
 
 /**
@@ -16,6 +17,18 @@ export type ToolScope = 'all' | 'read-only' | 'off';
 
 export function toolNamesFor(scope: ToolScope): string[] {
   return scope === 'off' ? [] : scope === 'read-only' ? READ_ONLY_TOOL_NAMES : ALL_TOOL_NAMES;
+}
+
+/**
+ * MCP の道具のうち、その範囲で渡すもの（docs/spec/13-mcp.md）。
+ * 読み取りのみの実行には、読み取りの注釈がある道具だけを渡す（注釈はサーバの自己申告）。
+ */
+export function mcpToolsFor(tools: ToolSpec[], scope: ToolScope): ToolSpec[] {
+  return scope === 'off'
+    ? []
+    : scope === 'read-only'
+      ? tools.filter((t) => t.risk === 'read')
+      : tools;
 }
 
 /** 権限の表記ゆれを受ける（ask / auto-edit / autoEdit / full）。読めなければ null。 */

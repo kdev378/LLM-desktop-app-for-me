@@ -113,11 +113,11 @@ akari config endpoints rm ep_local
 ```sh
 akari mcp add --name fs --command npx --arg -y --arg @modelcontextprotocol/server-filesystem --arg /tmp/docs
 akari mcp add --name search --url http://localhost:9000/mcp
-akari mcp list / tools <名前> / rm <名前> / doctor
-akari mcp serve --workspace ~/proj [--http --port 7802] [--permission readOnly|autoEdit|full]
+akari mcp list / tools <名前> / trust <名前> / rm <名前> / doctor
+akari mcp serve --workspace ~/proj [--permission read-only|auto-edit|full]   # --http は未実装
 ```
 
-`add` は、実行されるコマンドを見せて同意を取ってから登録する。
+`add` は、実行されるコマンドを見せて同意を取ってから登録する。詳しくは `docs/commands.md`。
 
 ### `akari index …`
 ベクトル索引（`14-memory.md`）。

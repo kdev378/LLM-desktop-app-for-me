@@ -124,6 +124,14 @@
 | 2026-10-28 | `request_secret_access` は、作業フォルダに秘密のファイルがあるときだけ渡す | 道具が増えると小さいモデルが迷う。recall と同じ考え方 | 常に渡す |
 | 2026-10-28 | コマンドに渡す環境変数から、git の設定（`GIT_CONFIG_COUNT/KEY_n/VALUE_n`）を組で外す | KEY_n だけが「鍵らしい名前」として外れ、COUNT が残って git が全部失敗していた（見つけて直した）。値に認証ヘッダが入りうる | — |
 | 2026-10-28 | ハーネスAPI（`akari serve`）は Node 標準の http だけで作る（`apps/server`） | 依存を増やさない。口の数が多くないので、自前の振り分けで足りる | Fastify などへ |
+| 2026-10-29 | MCP は公式 SDK v2（`@modelcontextprotocol/client` / `server` 2.3.1）を使う。stdio の接続だけ自前（プロセスグループごと止める） | 手順を自作すると仕様が動くたびに追いかけることになる。SDK の stdio は直接の子しか止めず、`npx` が起こした孫が残る | SDK の `StdioClientTransport` に戻す（`core/mcp/stdio.ts` を外す） |
+| 2026-10-29 | MCP サーバは起動する内容の指紋に同意したときだけ起動する。設定の中身が変わったら同意し直すまで起動しない | 登録は任意のプログラムを動かすことと同じ。設定を書き換えて別のものを動かす手口を塞ぐ。オーナー承認 | `consentState` を常に ok にする |
+| 2026-10-29 | MCP サーバはコマンドの閉じ込めの外で動かす | ファイル操作のサーバなどは指定した場所を読む必要がある。代わりに同意の文で「制限を受けない」と示す。オーナー承認 | 閉じ込めの中で起こす（`sandboxCommand` を通す） |
+| 2026-10-29 | MCP の接続は会話の間保つ（対話画面は閉じるまで、`run` と API は1回の実行の間） | 送るたびに起動し直すと毎回数秒待つ。オーナー承認 | 送るたびに `McpHub.connect` / `close` |
+| 2026-10-29 | MCP の承認は `trust` と権限モードの厳しいほう。`trust: ask` は「この実行中は許可」も出さない | 何をする道具か Akari には分からない。注釈はサーバの自己申告 | `mcpApproval` を変える |
+| 2026-10-29 | MCP の認証は `none` / `bearer` だけ。OAuth は後から足す口だけ用意 | 更新用トークンは長く使える鍵で、暗号化して置く場所がまだ無い。平文で増やさない。オーナー承認 | `auth.ts` で `OAuthClientProvider` を返す |
+| 2026-10-29 | `akari mcp serve` は stdio だけ。HTTP は後で | Claude Code などは stdio で起こす。HTTP は守り（Host / Origin / トークン）の設計と追加の SDK が要る | — |
+| 2026-10-29 | `mcp serve` は承認の相手がいないので、出す道具を権限で絞る。`delete_file` と削除のコマンドはどの権限でも出さない・実行しない。秘密のファイルは読めない | MCP の相手には Akari の承認画面が無い。取り消せない操作を無人で通さない | 道具の一覧（`exposedToolNames`）を変える |
 | 2026-10-28 | HTTP からの `full` は `server.allowFullPermission`（既定 false）のときだけ | コマンドがまだ作業フォルダに閉じ込められていない（P3+）。外部のツールが人の目を通さずにコマンドを実行できる状態を既定で作らない。オーナー承認（後で full にできるように） | 既定を true にする |
 | 2026-10-28 | ハーネスAPIの実行の記録とイベントをファイルに残し、再起動後も API で取れるようにする | オーナーの要望。落ちたときに走っていた実行は `interrupted` にする | 記録をメモリだけに戻す |
 | 2026-10-28 | 宛先（Host）が localhost でない要求を断る | DNS リバインディングを塞ぐ。仕様に足した | — |
@@ -156,7 +164,7 @@
 
 ## 9. 今の状態
 
-**P0〜P3 と対話画面まで完了（P2・対話画面は手元の LM Studio / macOS ターミナル、P3 は OpenRouter で確認）**
+**P0〜P3 と対話画面まで完了（P2・対話画面は手元の LM Studio / macOS ターミナル、P3 は OpenRouter で確認）。P4（MCP）は部分完了（なる側の HTTP が未実装、実機は未確認）**
 
 - 動いているもの:
   - `@akari/core`: 設定の読み書きと検証、鍵の解決（`env:` 参照込み）、OpenAI互換クライアント
@@ -168,9 +176,11 @@
     ステップ上限・ループ検出・中断、ツール非対応モデル向けの代替方式（prompted）、
     判定できないモデル向けの両対応（both）と、その自動切り替え・手動指定
   - `@akari/cli`: 対話画面（引数なしの `akari`、2026-10-28）、`config endpoints add/list/rm/use/probe`、`config list/get/set`、
-    `models`、`chat`、`doctor`、`run`、`diff`、`undo`、`runs`、`conversations`、`digest`、`recall`
+    `models`、`chat`、`doctor`、`run`、`diff`、`undo`、`runs`、`conversations`、`digest`、`recall`、
+    `mcp add/list/tools/trust/rm/doctor/serve`
   - `tools/mock-llm-server.mjs`: 開発用の模擬OpenAI互換サーバ
-- 検証済み: 自動テスト308件（core 233 / server 17 / CLI 58）。模擬サーバに対する通し動作。
+  - `tools/mock-mcp-server.mjs`: 開発用の模擬MCPサーバ（SDK を使わずに手で話す。stdio / HTTP）
+- 検証済み: 自動テスト327件（core 246 / server 18 / CLI 63）。模擬サーバに対する通し動作。
   特にパス境界18件、ツール18件、実行ループと取り消し21件、代替方式と両対応20件を重点的に。
 - 実機確認用: `bash tools/verify-local-llm.sh <ベースURL> [モデル...]` で複数モデルを
   比較し、貼れる報告が1ファイルに出る
@@ -187,12 +197,15 @@
 - 会話の保存（P1 の残り、2026-10-27）: `run` / `chat` の保存と続き、`akari conversations`。
   同時追記で行が混ざらないことは Linux でのみ確認
 - コマンドの閉じ込め（P3+、2026-10-28）: Linux（bubblewrap）で確認（この環境と Muse の VM）。**macOS（Seatbelt）は動かしていない**（`testing.md` 11-9）
-- 未実装: MCP（P4）、記憶（P5）、Web（P6）、デスクトップ（P7以降）
+- MCP（P4、2026-10-29）: 模擬MCPサーバと模擬モデル相手に、CLI・対話画面（疑似端末）・ハーネスAPI で確認。
+  `mcp serve` は Akari 自身の使う側からつないで確認。**Claude Code からの接続、本物の MCP サーバ、実モデル、macOS / Windows は未確認**（`testing.md` 11-10）。
+  `mcp serve --http` は未実装
+- 未実装: MCP のなる側の HTTP（P4 の残り）、記憶（P5）、Web（P6）、デスクトップ（P7以降）
 - 文脈の圧縮（P2、2026-10-27）: LM Studio で gemma-4-e4b が5分類の圧縮版を書け、`recall` と続きでの正答まで確認（2026-10-28、2回）。
   lfm3-1.7b は書けず、毎回機械的な要約になった（1回数分かかる）
 - 対話画面（2026-10-28）: 模擬サーバ相手に疑似端末で、入力・改行・承認・中断・`/` コマンド・続きを確認。
   **日本語の変換入力、実際の端末アプリ（macOS 標準のターミナルなど）での見え方は未確認**（`testing.md` 11-7）
 - ハーネスAPI（P3、2026-10-28）: `testing.md` 11-8 の全項目を実モデル（OpenRouter `cohere/north-mini-code:free`）で確認（Muse）。LM Studio では未確認
-- 次にやること: macOS での閉じ込めの確認（`testing.md` 11-9）→ P4（MCP）。LM Studio 固有の確認は並行して手元で。
+- 次にやること: macOS での閉じ込めの確認（`testing.md` 11-9）と、MCP の実機確認（`testing.md` 11-10）→ P5（記憶）。LM Studio 固有の確認は並行して手元で。
   文脈長の小さいモデルでは、圧縮が無いと数ステップで作業が止まるため、
   ハーネスAPI（P3）より先にする

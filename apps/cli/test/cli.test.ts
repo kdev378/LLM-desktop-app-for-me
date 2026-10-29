@@ -208,11 +208,47 @@ test('到達できない接続先は終了コード4', async () => {
 });
 
 test('未実装のコマンドは、あるように見せず終了コード2', async () => {
-  for (const name of ['mcp', 'index', 'web']) {
+  for (const name of ['index', 'web']) {
     const r = await akari([name]);
     assert.equal(r.code, 2, `${name} は未実装として終了コード2`);
     assert.match(r.stderr, /まだ実装されていません/);
   }
+});
+
+test('mcp add は起動する内容を見せて同意を取り、パイプの中では -y が無ければ断る', async () => {
+  // ほかのテストの設定に混ぜない
+  const own = await fs.mkdtemp(path.join(os.tmpdir(), 'akari-cli-mcp-'));
+  const env = { AKARI_HOME: own };
+  const MCP = path.join(here, '..', '..', '..', 'tools', 'mock-mcp-server.mjs');
+  const add = ['mcp', 'add', '--name', 'mock', '--command', process.execPath, '--arg', MCP];
+
+  const refused = await akari(add, '', { env });
+  assert.equal(refused.code, 3);
+  assert.match(refused.stderr, /次のコマンドがあなたのPCで実行されます/);
+  assert.match(refused.stderr, /-y を付けてください/);
+  assert.equal((await akari(['mcp', 'list'], undefined, { env })).stdout.includes('mock'), false);
+
+  const added = await akari([...add, '-y'], undefined, { env });
+  assert.equal(added.code, 0, added.stderr);
+  const tools = await akari(['mcp', 'tools', 'mock'], undefined, { env });
+  assert.equal(tools.code, 0, tools.stderr);
+  assert.match(tools.stdout, /mcp__mock__echo\s+読み取り/);
+  assert.match(tools.stdout, /mcp__mock__touch\s+実行/);
+
+  // 設定ファイルを書き換えて別のものを動かそうとしても、同意し直すまで起動しない
+  const file = path.join(own, 'config.json');
+  const cfg = JSON.parse(await fs.readFile(file, 'utf8'));
+  cfg.mcpServers[0].args.push('--other');
+  await fs.writeFile(file, JSON.stringify(cfg));
+  const doctor = await akari(['mcp', 'doctor'], undefined, { env });
+  assert.notEqual(doctor.code, 0);
+  assert.match(doctor.stdout, /内容が変わっています/);
+  assert.equal((await akari(['mcp', 'trust', 'mock'], '', { env })).code, 3);
+  assert.equal((await akari(['mcp', 'trust', 'mock', '-y'], undefined, { env })).code, 0);
+  assert.match((await akari(['mcp', 'doctor'], undefined, { env })).stdout, /✓ mock .*道具 6 件/);
+
+  assert.equal((await akari(['mcp', 'rm', 'mock'], undefined, { env })).code, 0);
+  assert.match((await akari(['mcp', 'list'], undefined, { env })).stdout, /登録されていません/);
 });
 
 test('診断の書き出しに鍵と会話本文が含まれない', async () => {

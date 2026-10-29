@@ -99,6 +99,8 @@
 | `web.fetch.allowPrivateHosts` | 真偽 | `false` | Web | 真にするとループバック・内部IPへも取りに行く |
 | `mcpServers[]` | 配列 | `[]` | 全体 | 外部MCPサーバ（`13-mcp.md`） |
 | `mcpServers[].trust` | `ask`/`readOnly`/`full` | `ask` | MCP | 自動実行の範囲。`readOnly` はサーバの自己申告を信じる選択 |
+| `mcpServers[].auth` | `{"type":"none"}` / `{"type":"bearer","token":"env:NAME"}` | `none` | MCP | HTTP の認証。`oauth` は後から足す（`13-mcp.md`） |
+| `mcpServers[].consent` | `{fingerprint, at}` / `null` | `null` | MCP | 起動の同意。`akari mcp add` / `trust` が書く。手で書かない |
 | `server.port` | 1024〜65535 | `7801` | ハーネスAPI | `akari serve` の待ち受けポート |
 | `server.allowOrigins` | 文字列配列 | `[]` | ハーネスAPI | 空ならブラウザからの要求を全拒否 |
 | `server.allowFullPermission` | 真偽 | `false` | ハーネスAPI | 真にしたときだけ、HTTP から `permissionMode: "full"` で頼める（`12-harness-api.md`「権限」）。コマンドを閉じ込められない環境では、真でも断る |

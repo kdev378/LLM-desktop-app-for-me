@@ -2,7 +2,7 @@
 
 現在できるのは **ターミナルの中で、ローカルLLMと会話し、作業フォルダの中で手を動かさせること**まで
 （対話画面と、スクリプト向けのヘッドレスのコマンド）。
-デスクトップアプリ、ハーネスAPI、MCP、記憶、Web はまだ無い（`docs/spec/11-roadmap.md`）。
+外部のツールから頼む口（ハーネスAPI・MCP）もある。デスクトップアプリ、記憶、Web はまだ無い（`docs/spec/11-roadmap.md`）。
 
 ## 用意するもの
 
@@ -252,8 +252,9 @@ akari run --tools-mode both "直して"       # 両方（判定を待たない�
 | `digest` / `recall` | 文脈の圧縮版を見る・圧縮した生の記録を探す |
 | `doctor` | 状態の確認。`--export` で診断の書き出し |
 | `serve` | ハーネスAPI。外部のツールから HTTP で頼めるようにする（この PC の中からだけ） |
+| `mcp` | 外部の MCP サーバの道具を使う（`add` / `list` / `tools` / `doctor`）。`mcp serve` で Akari の道具を Claude Code などへ出す |
 
-`mcp` / `index` / `web` は未実装。
+`index` / `web` は未実装。
 実行すると「まだ実装されていません」と出る。
 
 ## 保存される場所

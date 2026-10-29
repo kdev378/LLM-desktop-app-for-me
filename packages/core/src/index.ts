@@ -19,6 +19,9 @@ export {
   type ContextSettings,
   type ServerSettings,
   type SandboxSettings,
+  type McpServerConfig,
+  type McpAuth,
+  mcpServerSchema,
   type PermissionMode,
   type Credentials,
 } from './config/schema.js';
@@ -116,6 +119,7 @@ export {
   type ToolLimits,
   type ToolPreview,
   type Risk,
+  type McpTrust,
 } from './tools/types.js';
 export {
   walk,
@@ -149,10 +153,30 @@ export {
   type SandboxPolicy,
 } from './tools/sandbox.js';
 export { SECRET_ACCESS_TOOL_NAME } from './tools/secrets.js';
+
+// MCP（docs/spec/13-mcp.md）
+export {
+  McpHub,
+  uniqueName as mcpToolName,
+  resultText as mcpResultText,
+  type McpServerStatus,
+  type McpServerState,
+  type McpNotice,
+  type McpConnectOptions,
+} from './mcp/hub.js';
+export {
+  mcpFingerprint,
+  consentState,
+  withConsent,
+  describeLaunch,
+  type ConsentState,
+} from './mcp/consent.js';
+export { McpAuthError } from './mcp/auth.js';
 export {
   decideToolsMode,
   parsePermission,
   toolNamesFor,
+  mcpToolsFor,
   windowTokensFor,
   type ToolScope,
   type ToolsModeDecision,

@@ -53,7 +53,10 @@ export function summarizeArgs(args: unknown): string {
   if (typeof rec.command === 'string') return rec.command.slice(0, 120);
   if (typeof rec.path === 'string') return rec.path;
   if (typeof rec.pattern === 'string') return rec.pattern;
-  return '';
+  // MCP の道具など、形の決まっていない引数は短い JSON で見せる
+  const json = JSON.stringify(rec);
+  if (json === '{}') return '';
+  return json.length > 120 ? `${json.slice(0, 119)}…` : json;
 }
 
 /**
