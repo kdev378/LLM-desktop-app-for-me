@@ -198,7 +198,9 @@
   同時追記で行が混ざらないことは Linux でのみ確認
 - コマンドの閉じ込め（P3+、2026-10-28）: Linux（bubblewrap）で確認（この環境と Muse の VM）。**macOS（Seatbelt）は動かしていない**（`testing.md` 11-9）
 - MCP（P4、2026-10-29）: 模擬MCPサーバと模擬モデル相手に、CLI・対話画面（疑似端末）・ハーネスAPI で確認。
-  `mcp serve` は Akari 自身の使う側からつないで確認。**Claude Code からの接続、本物の MCP サーバ、実モデル、macOS / Windows は未確認**（`testing.md` 11-10）。
+  `mcp serve` は Akari 自身の使う側からつないで確認。Muse が `testing.md` 11-10 の A（使う側）全項目と、
+  B（なる側）を stdio の JSON-RPC 直打ちで確認（2026-10-29）。
+  **Claude Code / OpenCode からの接続、本物の MCP サーバ、実モデル、macOS / Windows は未確認**（`testing.md` 11-10 の B・C）。
   `mcp serve --http` は未実装
 - 未実装: MCP のなる側の HTTP（P4 の残り）、記憶（P5）、Web（P6）、デスクトップ（P7以降）
 - 文脈の圧縮（P2、2026-10-27）: LM Studio で gemma-4-e4b が5分類の圧縮版を書け、`recall` と続きでの正答まで確認（2026-10-28、2回）。
@@ -206,6 +208,7 @@
 - 対話画面（2026-10-28）: 模擬サーバ相手に疑似端末で、入力・改行・承認・中断・`/` コマンド・続きを確認。
   **日本語の変換入力、実際の端末アプリ（macOS 標準のターミナルなど）での見え方は未確認**（`testing.md` 11-7）
 - ハーネスAPI（P3、2026-10-28）: `testing.md` 11-8 の全項目を実モデル（OpenRouter `cohere/north-mini-code:free`）で確認（Muse）。LM Studio では未確認
-- 次にやること: macOS での閉じ込めの確認（`testing.md` 11-9）と、MCP の実機確認（`testing.md` 11-10）→ P5（記憶）。LM Studio 固有の確認は並行して手元で。
+- 次にやること: オーナーが手元の VM で、閉じ込め（`testing.md` 11-9、`pnpm check:sandbox` を追加）と
+  MCP の実機（11-10 の B を Claude Code / OpenCode で、C を本物の MCP サーバで）を確認 → P5（記憶）。LM Studio 固有の確認は並行して手元で。
   文脈長の小さいモデルでは、圧縮が無いと数ステップで作業が止まるため、
   ハーネスAPI（P3）より先にする

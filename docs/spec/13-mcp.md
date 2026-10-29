@@ -213,7 +213,9 @@ Claude Code や他のMCPクライアントから、Akari のツールを使え�
 MCPクライアント側には Akari の承認UIが無い。そこで:
 
 - 既定は `--permission readOnly`。読み取りツールだけを公開する。
-- 書き込み・実行を出すには `--permission autoEdit` / `--permission full` を明示する。
+- 編集（`write_file` / `edit_file`）を出すには `--permission auto-edit`、コマンドの実行（`run_command`）を出すには
+  `--permission full` を明示する。`auto-edit` では `run_command` は出さない（Akari 自身の `auto-edit` ではコマンドは承認制で、
+  MCP には承認を取る相手がいないため）。
   起動時に、何が承認なしで実行されるかを標準エラーへ一覧表示する。
 - どのモードでも、パス境界と変更記録は必ず効く。ここは外せない。
 

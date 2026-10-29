@@ -294,7 +294,8 @@ akari "docs の中身を要約して"      # mcp__fs__* が使われる
 - [x] 登録時にコマンドを見せて同意を取る。設定を手書き・書き換えした場合も起動前に止まる（自動テスト・CLI の通し）
 - [x] 閉じたとき・起動に失敗したときに、MCPの子プロセスが孫まで残らない（自動テスト。Linux のみ）
 - [x] `akari mcp serve` にMCPの使う側からつないで、パス境界と取り消しが効く（Akari 自身の使う側からの自動テスト）
-- [ ] **`akari mcp serve` に Claude Code から繋ぐ（未実施。`testing.md` 11-10 B）**
+- [x] `akari mcp serve` に stdio の JSON-RPC を直接送って、道具の出し分け・パス境界・秘密・取り消しが効く（Muse、2026-10-29）
+- [ ] **`akari mcp serve` に Claude Code / OpenCode から繋ぐ（未実施。`testing.md` 11-10 B）**
 - [ ] **本物の MCP サーバ（`@modelcontextprotocol/server-filesystem` など）と、実モデルでの通し（未実施）**
 - [ ] **macOS / Windows で子プロセスが残らないこと（未実施）**
 

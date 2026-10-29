@@ -742,12 +742,30 @@ akari mcp serve --workspace ~/proj --permission full        # + コマンドの�
 ```
 
 相手のプログラムが起こすもの（標準入出力でやり取りする）なので、自分で端末から起こして使うものではない。
-Claude Code に登録する例（書式は Claude Code 側の説明で確かめてください）:
+Claude Code に登録する例（`--` より後ろが、そのまま起こすコマンドになる）:
 
 ```sh
-claude mcp add akari -- akari mcp serve --workspace ~/proj --permission auto-edit
+claude mcp add --transport stdio akari -- akari mcp serve --workspace ~/proj --permission auto-edit
+claude mcp list                     # 登録の確認。外すときは claude mcp remove akari
 # akari コマンドを入れていなければ: -- node <Akari の場所>/apps/cli/dist/index.js mcp serve …
 ```
+
+OpenCode に登録する例（プロジェクトの `opencode.json`。`~` は展開されないので、作業フォルダは絶対パスで書く）:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "akari": {
+      "type": "local",
+      "command": ["akari", "mcp", "serve", "--workspace", "/Users/me/proj", "--permission", "auto-edit"],
+      "enabled": true
+    }
+  }
+}
+```
+
+`opencode mcp list` で、つながっているかが見られる。
 
 | 権限 | 出す道具 |
 |---|---|

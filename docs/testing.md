@@ -946,7 +946,16 @@ pnpm test:sandbox
 **期待**: `# pass 11` / `# fail 0` / `# skipped 0`。`skipped` が出たら、閉じ込めが使えないと判定された（その行の理由を教えてほしい）。
 失敗したら、出力をそのまま貼ってほしい。macOS の規則が外れているのはここで分かる。
 
-次に手で（作業フォルダは使い捨て。ホームの下に作る）:
+次に、本物の `akari` で通しに（モデルは模擬サーバが台本どおりに答えるので、LLM は要らない。あなたの設定には触らない）:
+
+```sh
+pnpm check:sandbox
+```
+
+**期待**: 先頭に `閉じ込め: あり（seatbelt）`（Linux なら `bubblewrap`）、6行が `PASS`（`~/.ssh` が無ければその行は `SKIP`）、最後に `結果: すべて PASS`。
+`FAIL` があれば、全部をそのまま貼ってほしい。閉じ込めが無い環境では、上の3行が `FAIL` になる（それで正しく検出できている）。
+
+最後に手で（作業フォルダは使い捨て。ホームの下に作る。実モデルが要る）:
 
 ```sh
 mkdir -p ~/akari-sbx-try && cd ~/akari-sbx-try && echo 'API_KEY=dummy' > .env && echo x > a.txt
@@ -963,6 +972,18 @@ akari -m <モデルID> --permission full
 | `run_command で npm --version と git status を実行して` | ふつうに動く |
 
 終わったら `rm -rf ~/akari-sbx-try`。
+
+**VM で試すとき**（あなたの Mac を直接使わない）:
+
+- macOS の VM（Apple シリコンの Mac で UTM などを使う）: VM の中に Node.js 22 以上と git を入れ、このリポジトリを clone して
+  `corepack enable pnpm && pnpm install && pnpm build`。そのうえで `pnpm test:sandbox` と `pnpm check:sandbox`。
+  ここまではモデルが要らない。最後の手の確認で実モデルを使うなら、VM に LM Studio を入れるか、
+  ホストの LM Studio を「ローカルネットワークで公開」にして、VM から `http://<ホストのIP>:1234/v1` を接続先にする
+  （ホストの IP は VM のネットワーク設定次第。VM の中で `netstat -rn` の default の行などで確かめる）
+- Linux の VM（Ubuntu など）: `sudo apt install bubblewrap` のうえで同じ手順。Ubuntu 24.04 以降では、
+  標準の設定で bubblewrap が止められて `閉じ込め: なし（bubblewrap が動きません: …）` になることがある。
+  そうなったら、その行をそのまま貼ってほしい（直し方はこちらで案内する）
+- VM ごと捨てられるので、手の確認で `full` を使っても安心
 
 ### 11-10. MCP（P4）
 
@@ -1006,11 +1027,28 @@ akari -m <モデルID>
 
 ```sh
 mkdir -p ~/akari-mcp-serve && cd ~/akari-mcp-serve && echo 'hello' > a.txt && echo 'API_KEY=dummy' > .env
-claude mcp add akari -- akari mcp serve --workspace ~/akari-mcp-serve --permission auto-edit
+claude mcp add --transport stdio akari -- akari mcp serve --workspace ~/akari-mcp-serve --permission auto-edit
+claude mcp list        # akari が connected（のような表示）になること
 claude
 ```
 
-（`claude mcp add` の書式が違ったら、Claude Code 側の説明に合わせてほしい。言いたいのは「`akari mcp serve --workspace … --permission auto-edit` を stdio の MCP サーバとして登録する」こと。）
+**OpenCode で試すとき**は、`~/akari-mcp-serve/opencode.json` を作る（`/Users/me` は自分のホームに置き換える。`~` は効かない）:
+
+```json
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "akari": {
+      "type": "local",
+      "command": ["akari", "mcp", "serve", "--workspace", "/Users/me/akari-mcp-serve", "--permission", "auto-edit"],
+      "enabled": true
+    }
+  }
+}
+```
+
+`cd ~/akari-mcp-serve && opencode mcp list` で akari が見えたら、`opencode` を起動して下の表と同じ依頼をする。
+OpenCode の中のモデルは何でもよい（Akari の道具を呼ばせるのが目的）。
 
 | Claude Code への依頼 | 期待 |
 |---|---|
@@ -1023,6 +1061,21 @@ claude
 
 終わったら Claude Code を閉じ、`akari runs` に `（MCP経由）` の行があることを確かめる。
 片付け: `claude mcp remove akari`、`akari mcp rm mock`、`akari mcp rm broken`、`rm -rf ~/akari-mcp-try ~/akari-mcp-serve`。
+
+**C. 本物の MCP サーバを Akari から使う（実モデルが要る）。** 模擬サーバでは出ない形（長い結果、画像、
+続きのページ、遅い起動）を見たい。`npx` / `uvx` が初回にダウンロードするので、起動が遅いのは正常
+（遅すぎると `startupTimeoutMs` の15秒で「使いません」になる。そのときは2回目で通るかも見てほしい）。
+
+| サーバ | 登録 | 試す依頼と見たいこと |
+|---|---|---|
+| ファイル操作 | `akari mcp add --name fs --command npx --arg -y --arg @modelcontextprotocol/server-filesystem --arg ~/akari-mcp-try` | 「fs の道具でこのフォルダのファイル一覧を出して」。`akari mcp tools fs` で、読み取り系が「読み取り」、書き込み系が「実行」に分かれているか |
+| 機能見本 | `akari mcp add --name every --command npx --arg -y --arg @modelcontextprotocol/server-everything` | 道具が多い見本のサーバ。`akari mcp tools every` が全部出るか、画像を返す道具で「画像が返りました…まだ渡せません」と出て止まらないか |
+| Web 取得（Python） | `akari mcp add --name fetch --command uvx --arg mcp-server-fetch` | 「fetch で https://example.com を取って要約して」。長い結果が切り詰められても会話が続くか。`uvx` が無ければ飛ばしてよい |
+| git（Python） | `akari mcp add --name git --command uvx --arg mcp-server-git --arg --repository --arg <どこかのリポジトリ>` | 「git の道具で最近のコミットを3つ見せて」 |
+
+各サーバで見たいのは次の4つ: `akari mcp doctor` が `✓`、実行で承認が出て「取り消せません」とある、
+結果がモデルに渡って答えに使われる、閉じた後に `ps aux | grep -E "server-|mcp-server"` で残っていない。
+サーバ名や引数が変わっていて登録に失敗したら、その出力を貼ってほしい（Akari 側の問題か、配布物の変更かを切り分ける）。
 
 ---
 
