@@ -21,6 +21,7 @@
   backups/             # 実行ごとの変更前バックアップと journal.json
   worktrees/           # 実行ごとの git worktree（12-harness-api.md）
   index/               # ベクトル索引（14-memory.md）
+  models/              # 内蔵の埋め込みモデル（初回に取得。14-memory.md）
   logs/
   akari.lock           # 多重起動の検出用
 ```
@@ -93,7 +94,8 @@
 | `ui.density` | `comfortable` / `compact` | `comfortable` | 画面 | 行間と余白 |
 | `logging.level` | `error`/`warn`/`info`/`debug`/`trace` | `info` | 全体 | 再起動なしで変更が効く |
 | `memory.enabled` | 真偽 | `false` | 全体 | ベクトル索引の有効・無効（`14-memory.md`） |
-| `memory.embeddingModel` | 文字列 または null | `null` | 索引 | 未指定なら索引を作れない。推測しない |
+| `memory.embedding.source` | `builtin`/`endpoint` | `builtin` | 索引 | 内蔵（Akari が CPU で動かす、版を固定したモデル）か外部か（`14-memory.md`） |
+| `memory.embedding.model` | 文字列 または null | `null` | 索引 | 外部のときのモデル名。未指定なら索引を作れない。推測しない |
 | `web.enabled` | 真偽 | `false` | 全体 | Web検索・取得の有効・無効（`15-web.md`） |
 | `web.consent` | `perRun`/`once`/`never` | `perRun` | Web | 外部へ問い合わせる前の確認の頻度 |
 | `web.fetch.allowPrivateHosts` | 真偽 | `false` | Web | 真にするとループバック・内部IPへも取りに行く |

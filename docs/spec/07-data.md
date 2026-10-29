@@ -37,6 +37,8 @@
       meta.json                     # 埋め込みモデルと次元。合わないものは混ぜない
       chunks.jsonl
       vectors.bin                   # Float32Array。DBを使わない（14-memory.md）
+  models/
+    <モデルID>@<版>/                # 内蔵の埋め込みモデル。初回に取得し、指紋を確かめる（14-memory.md）
   worktrees/
     <runId>/                        # git worktree。実行が終わっても消さない
   server.json                       # ハーネスAPIのトークン。0600
