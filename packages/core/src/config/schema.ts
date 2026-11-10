@@ -202,6 +202,11 @@ export const contextSchema = z.object({
   keepRecentTurns: z.number().int().min(1).max(20).default(3),
   /** 圧縮に使うモデル。null なら実行と同じ。同じ接続先のモデル名。 */
   digestModel: z.string().min(1).nullable().default(null),
+  /**
+   * 圧縮の呼び出しで、要約の本文（4096トークン）とは別に取る思考の枠（トークン）。
+   * 思考を止められないモデルが、思考だけで応答の上限を使い切らないため。文脈長の範囲で取る。
+   */
+  digestReasoningTokens: z.number().int().min(0).max(131_072).default(8192),
 });
 
 /** 記憶（ベクトル索引）。docs/spec/14-memory.md「設定」 */

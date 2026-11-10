@@ -489,6 +489,7 @@ akari config set logging.level debug
 | `context.compactAtTokens` | 1000以上 | `12000` |
 | `context.keepRecentTurns` | 1〜20 | `3` |
 | `context.digestModel` | モデル名 または `null` | `null`（実行と同じ） |
+| `context.digestReasoningTokens` | 0〜131072 | `8192`。圧縮で、思考を止められないモデルのために別に取る思考の枠。圧縮が「思考が長く上限に達した」で落ちるなら増やす |
 | `agent.deniedCommands` | 文字列配列（JSON） | 下記 |
 | `ui.theme` | `light` / `dark` / `system` | `system` |
 | `ui.density` | `comfortable` / `compact` | `comfortable` |

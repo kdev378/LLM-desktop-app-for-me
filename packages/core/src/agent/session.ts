@@ -41,7 +41,7 @@ import {
   truncateMiddle,
   type Unit,
 } from '../context/budget.js';
-import { compact } from '../context/compactor.js';
+import { compact, compactionBudget } from '../context/compactor.js';
 import { renderDigest, type Compaction } from '../context/digest.js';
 import type { ContextSettings, SandboxSettings } from '../config/schema.js';
 import type { ChatMessage, ToolDefinition } from '../provider/types.js';
@@ -1111,12 +1111,10 @@ export class Session {
           units,
           previous: this.compaction?.digest ?? null,
           knownIds: new Set(this.entries.map((e) => e.id)),
-          // 1回の圧縮に使う量。文脈長の半分（分からなければ判断の閾値の8割）
-          budgetTokens:
-            window !== null
-              ? Math.floor(window * 0.5)
-              : Math.floor(ctx.settings.compactAtTokens * 0.8),
-          ...(this.opts.reasoning ? { reasoning: this.opts.reasoning } : {}),
+          // 1回の圧縮に入れるログの量。応答（要約の本文＋思考の枠）を先に確保した残り（16-context.md）
+          budgetTokens: compactionBudget(window, ctx.settings).inputTokens,
+          windowTokens: window,
+          reasoningTokens: ctx.settings.digestReasoningTokens,
           signal: this.controller.signal,
         });
         const coveredIds = [...this.covered, ...units.flatMap((u) => u.entries.map((e) => e.id))];

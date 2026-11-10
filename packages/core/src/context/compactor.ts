@@ -1,4 +1,4 @@
-import type { ChatMessage, Provider, ReasoningLevel } from '../provider/types.js';
+import type { ChatMessage, FinishReason, Provider } from '../provider/types.js';
 import type { TranscriptEntry } from '../agent/transcript.js';
 import { CHARS_PER_TOKEN, type Unit } from './budget.js';
 import {
@@ -15,6 +15,8 @@ import {
  * - 前回の Digest を入力に含めて積み増す（毎回ゼロから作ると、要約の要約で薄まる）
  * - 1回の呼び出しに入りきらないときは分けて、順に積み増す
  * - 読めなければ1度だけ「形式が違う」と伝えてやり直させる。それでも駄目なら機械的な要約へ
+ * - 思考は要約の本文とは別枠で取る。思考を止められないモデルが、思考だけで上限を使い切らないため。
+ *   それでも使い切ったら、文脈長の範囲で枠を倍にして1度だけやり直し、まだ駄目ならログを半分に分ける
  */
 
 const SYSTEM = `あなたは作業記録の要約係です。エージェントの作業ログの古い部分を、あとで作業を続けるための記録にまとめます。
@@ -39,7 +41,36 @@ const SYSTEM = `あなたは作業記録の要約係です。エージェント�
 
 /** 1件の上限（文字）。ログ全体ではなく、1件が巨大なときに抑えるため。 */
 const CAP = { user: 4000, assistant: 4000, reasoning: 1000, toolHead: 1500, toolTail: 500 };
-const DIGEST_MAX_TOKENS = 4096;
+/** 要約の本文に取る量（トークン）。思考の枠はこれとは別。 */
+export const DIGEST_ANSWER_TOKENS = 4096;
+/** 文脈長のうち、圧縮の呼び出しで使ってよい割合（残りは数え違いの余裕）。 */
+const WINDOW_USE = 0.95;
+/** 思考で使い切ったとき、ログを半分に分けてよい回数。 */
+const MAX_SPLIT_DEPTH = 2;
+
+/**
+ * 1回の圧縮の呼び出しの量。応答（要約の本文＋思考の枠）を先に確保し、残りをログに充てる。
+ * 文脈長が分からなければ、ログは compactAtTokens の8割、応答は本文＋思考の枠。
+ */
+export function compactionBudget(
+  windowTokens: number | null,
+  settings: { compactAtTokens: number; digestReasoningTokens: number },
+): { inputTokens: number; outputTokens: number } {
+  const want = DIGEST_ANSWER_TOKENS + settings.digestReasoningTokens;
+  if (windowTokens === null) {
+    return { inputTokens: Math.floor(settings.compactAtTokens * 0.8), outputTokens: want };
+  }
+  // 応答に文脈長の6割まで。ログは文脈長の半分まで（以前と同じ上限）
+  const outputTokens = Math.max(
+    DIGEST_ANSWER_TOKENS,
+    Math.min(want, Math.floor(windowTokens * 0.6)),
+  );
+  const inputTokens = Math.max(
+    1000,
+    Math.min(Math.floor(windowTokens * 0.5), Math.floor(windowTokens * WINDOW_USE) - outputTokens),
+  );
+  return { inputTokens, outputTokens };
+}
 
 export type CompactRequest = {
   provider: Provider;
@@ -48,9 +79,12 @@ export type CompactRequest = {
   previous: Digest | null;
   /** sources に使ってよい ID（生の記録すべて）。 */
   knownIds: ReadonlySet<string>;
-  /** 1回の圧縮の呼び出しに使ってよい量（トークン）。 */
+  /** 1回の圧縮の呼び出しに入れるログの量（トークン）。compactionBudget で決める。 */
   budgetTokens: number;
-  reasoning?: ReasoningLevel;
+  /** 文脈長。分かれば、応答の上限をその範囲で伸ばす。分からなければ伸ばさない。 */
+  windowTokens: number | null;
+  /** 要約の本文とは別に取る思考の枠（トークン）。 */
+  reasoningTokens: number;
   signal?: AbortSignal;
 };
 
@@ -67,9 +101,23 @@ export async function compact(req: CompactRequest): Promise<CompactResult> {
   let digest = req.previous ?? emptyDigest();
   let fallback: CompactionFallback | undefined;
 
-  for (const chunk of chunkUnits(req.units, req.budgetTokens, digest)) {
+  // 思考で使い切った塊は、半分に分けて先頭へ戻す（分けた分だけ、応答に回せる量が増える）
+  const queue = chunkUnits(req.units, req.budgetTokens, digest).map((units) => ({
+    units,
+    depth: 0,
+  }));
+  while (queue.length > 0) {
+    const { units: chunk, depth } = queue.shift()!;
     const entries = chunk.flatMap((u) => u.entries);
     const result = await digestChunk(req, digest, chunk);
+    if (!result.ok && result.exhausted && chunk.length > 1 && depth < MAX_SPLIT_DEPTH) {
+      const half = Math.ceil(chunk.length / 2);
+      queue.unshift(
+        { units: chunk.slice(0, half), depth: depth + 1 },
+        { units: chunk.slice(half), depth: depth + 1 },
+      );
+      continue;
+    }
     if (result.ok) {
       digest = result.digest;
       if (result.unknownSources > 0) {
@@ -78,7 +126,9 @@ export async function compact(req: CompactRequest): Promise<CompactResult> {
         );
       }
       if (result.bareItems > 0) {
-        notes.push(`圧縮版の ${result.bareItems} 項目に根拠の ID が付いていませんでした。中身はそのまま残しています。`);
+        notes.push(
+          `圧縮版の ${result.bareItems} 項目に根拠の ID が付いていませんでした。中身はそのまま残しています。`,
+        );
       }
       continue;
     }
@@ -93,9 +143,14 @@ export async function compact(req: CompactRequest): Promise<CompactResult> {
 
 type ChunkResult =
   | { ok: true; digest: Digest; unknownSources: number; bareItems: number }
-  | { ok: false; reason: CompactionFallback; detail: string };
+  /** exhausted … 思考で応答の上限を使い切り、要約を書き終えられなかった。 */
+  | { ok: false; reason: CompactionFallback; detail: string; exhausted?: boolean };
 
-async function digestChunk(req: CompactRequest, previous: Digest, chunk: Unit[]): Promise<ChunkResult> {
+async function digestChunk(
+  req: CompactRequest,
+  previous: Digest,
+  chunk: Unit[],
+): Promise<ChunkResult> {
   const hasPrevious = Object.values(previous).some((l) => l.length > 0);
   const messages: ChatMessage[] = [
     { role: 'system', content: SYSTEM },
@@ -108,19 +163,26 @@ async function digestChunk(req: CompactRequest, previous: Digest, chunk: Unit[])
   ];
 
   let lastError = '';
-  for (let attempt = 0; attempt < 2; attempt++) {
+  let grow = 1;
+  for (let attempt = 0; attempt < 2;) {
     let text = '';
+    let reasoningChars = 0;
+    let finish: FinishReason | null = null;
+    const maxTokens = answerTokens(req, messages, grow);
     for await (const ev of req.provider.chat(
       {
         model: req.model,
         messages,
         temperature: 0.2,
-        maxTokens: DIGEST_MAX_TOKENS,
-        ...(req.reasoning ? { reasoning: req.reasoning } : {}),
+        maxTokens,
+        // 要約に思考は要らない。止められるモデルは止める（止められないモデルは無視する。枠は上で別に取ってある）
+        reasoning: 'off',
       },
       req.signal,
     )) {
       if (ev.type === 'text-delta') text += ev.text;
+      else if (ev.type === 'reasoning-delta') reasoningChars += ev.text.length;
+      else if (ev.type === 'finish') finish = ev.reason;
       else if (ev.type === 'error') {
         return ev.error.kind === 'aborted'
           ? { ok: false, reason: 'aborted', detail: '中断されました' }
@@ -129,6 +191,19 @@ async function digestChunk(req: CompactRequest, previous: Digest, chunk: Unit[])
     }
     const parsed = parseDigest(text, req.knownIds);
     if (parsed.ok) return parsed;
+    // 上限で切れた（思考で使い切った）。形式の指摘をしても意味が無い。枠を伸ばすか、分けてもらう
+    if (finish === 'length') {
+      const detail =
+        `モデルの思考が長く、圧縮版を書き終える前に応答の上限（${maxTokens} トークン、思考 約${reasoningChars} 文字）に達しました` +
+        (req.windowTokens === null
+          ? '。文脈長が分からないため伸ばしていません（akari config endpoints probe --context で設定できます）'
+          : '。context.digestReasoningTokens を増やすか、文脈長を伸ばすと通ることがあります');
+      if (grow === 1 && answerTokens(req, messages, 2) > maxTokens) {
+        grow = 2;
+        continue;
+      }
+      return { ok: false, reason: 'parse-failed', detail, exhausted: true };
+    }
     lastError = parsed.error;
     // 1度だけ、何が違ったかを伝えてやり直させる
     messages.push({ role: 'assistant', content: text });
@@ -136,8 +211,23 @@ async function digestChunk(req: CompactRequest, previous: Digest, chunk: Unit[])
       role: 'user',
       content: `[akari] 形式が違います: ${parsed.error}\n説明は書かずに、\`\`\`akari-digest のブロック1つだけを出してください。`,
     });
+    attempt++;
   }
   return { ok: false, reason: 'parse-failed', detail: lastError };
+}
+
+/**
+ * 応答の上限。要約の本文＋思考の枠（grow 倍）。文脈長が分かれば、ログを入れた残りまで。
+ * 文脈長が分からなければ伸ばさない（送れない量を頼むと、サーバによっては断られるため）。
+ */
+function answerTokens(req: CompactRequest, messages: ChatMessage[], grow: number): number {
+  const want = DIGEST_ANSWER_TOKENS + req.reasoningTokens * grow;
+  if (req.windowTokens === null) return DIGEST_ANSWER_TOKENS + req.reasoningTokens;
+  // 概算は少なめに出ることがあるので、1割多めに見る
+  const chars = messages.reduce((n, m) => n + m.content.length, 0);
+  const input = Math.ceil((chars / CHARS_PER_TOKEN) * 1.1);
+  const room = Math.floor(req.windowTokens * WINDOW_USE) - input;
+  return Math.max(DIGEST_ANSWER_TOKENS, Math.min(want, room));
 }
 
 /** 1回の呼び出しに入るように分ける。1単位が大きすぎても、単独で1回にする（中で切り詰める）。 */
@@ -174,9 +264,12 @@ function renderEntry(e: TranscriptEntry): string {
     return `${id} ${e.source === 'akari' ? 'Akari からの指摘' : '利用者'}: ${cap(e.text, CAP.user)}`;
   }
   if (e.role === 'assistant') {
-    const lines = [`${id} モデル${e.failed ? '（失敗した応答）' : ''}: ${cap(e.text, CAP.assistant)}`];
+    const lines = [
+      `${id} モデル${e.failed ? '（失敗した応答）' : ''}: ${cap(e.text, CAP.assistant)}`,
+    ];
     if (e.reasoning) lines.push(`  （思考の抜粋）${cap(e.reasoning, CAP.reasoning)}`);
-    for (const c of e.toolCalls ?? []) lines.push(`  呼んだ道具: ${c.name} ${cap(c.argumentsRaw, 300)}`);
+    for (const c of e.toolCalls ?? [])
+      lines.push(`  呼んだ道具: ${c.name} ${cap(c.argumentsRaw, 300)}`);
     return lines.join('\n');
   }
   const body =

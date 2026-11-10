@@ -276,7 +276,13 @@ export {
   CHARS_PER_TOKEN,
   type Unit,
 } from './context/budget.js';
-export { compact, type CompactRequest, type CompactResult } from './context/compactor.js';
+export {
+  compact,
+  compactionBudget,
+  DIGEST_ANSWER_TOKENS,
+  type CompactRequest,
+  type CompactResult,
+} from './context/compactor.js';
 export { searchTranscript, formatEntry, RECALL_TOOLS, type RecallHit } from './tools/recall.js';
 export {
   approvalOptions,

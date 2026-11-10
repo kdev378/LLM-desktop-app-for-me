@@ -47,7 +47,7 @@
   "generation": { "temperature": 0.7, "topP": 1.0, "maxTokens": null },
   "context": {
     "mode": "auto", "compactAtRatio": 0.7, "compactAtTokens": 12000,
-    "keepRecentTurns": 3, "digestModel": null
+    "keepRecentTurns": 3, "digestModel": null, "digestReasoningTokens": 8192
   },
   "agent": {
     "permissionMode": "ask",
@@ -116,6 +116,7 @@
 | `context.compactAtTokens` | 1000以上 | `12000` | 文脈 | 文脈長が不明なときの絶対値 |
 | `context.keepRecentTurns` | 1〜20 | `3` | 文脈 | 生のまま残す直近ターン数 |
 | `context.digestModel` | 文字列 または null | `null` | 文脈 | 圧縮に使うモデル。null なら実行と同じ |
+| `context.digestReasoningTokens` | 整数（0〜131072） | `8192` | 文脈 | 圧縮の応答に、要約の本文とは別に取る思考の枠（`16-context.md`） |
 | `capabilities.byModel[m].contextTokens` | 整数 または null | `null` | モデル | そのモデルの文脈長。分からないものを分かったふりにしない |
 | `logging.retainDays` | 1〜365 | 14 | ログ | 起動時に古いファイルを削除 |
 | `concurrency.maxParallelRuns` | 1〜16 | 4 | 全体 | 超えた実行は待機列に入る |

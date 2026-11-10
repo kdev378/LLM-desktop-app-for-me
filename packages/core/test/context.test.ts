@@ -11,6 +11,8 @@ import {
   parseDigest,
   selectForCompaction,
   compactThreshold,
+  compact,
+  compactionBudget,
   defaultConfig,
   type ChatEvent,
   type ChatRequest,
@@ -608,4 +610,159 @@ test('残す直近の手が大きすぎるときは、残す手数を減らし�
   assert.ok(compactions >= 1);
   assert.ok(compactions <= 3, `8手で圧縮は ${compactions} 回（毎手ではない）`);
   assert.ok(digests.length >= 1);
+});
+
+// ---------------- 思考を止められないモデル（圧縮の応答の上限を思考で使い切る） ----------------
+
+/**
+ * 思考に thinkTokens を使うモデル。応答の上限（maxTokens）がそれ＋本文に足りなければ、
+ * 思考の途中で上限に達して（finish: length）、本文を何も書かない。reasoning: 'off' は無視する。
+ */
+function thinkingDigester(thinkTokens: number) {
+  const calls: ChatRequest[] = [];
+  const p: Provider = {
+    endpointId: 'ep_think',
+    async listModels() {
+      return [{ id: 'm' }];
+    },
+    async probe(): Promise<never> {
+      throw new Error('使わない');
+    },
+    async *chat(req: ChatRequest): AsyncGenerator<ChatEvent, void, void> {
+      calls.push(structuredClone(req));
+      yield { type: 'start', model: req.model };
+      const limit = req.maxTokens ?? 0;
+      if (limit < thinkTokens + 500) {
+        yield { type: 'reasoning-delta', text: 'うーん'.repeat(Math.floor(limit / 3)) };
+        yield { type: 'finish', reason: 'length' };
+        return;
+      }
+      yield { type: 'reasoning-delta', text: 'うーん'.repeat(Math.floor(thinkTokens / 3)) };
+      yield { type: 'text-delta', text: fence(validDigestFor(req)) };
+      yield { type: 'finish', reason: 'stop' };
+    },
+  };
+  return { p, calls };
+}
+
+let idSeq = 0;
+const nextId = () => `01J${String(++idSeq).padStart(23, '0')}`;
+function units(n: number) {
+  return Array.from({ length: n }, (_, i) => {
+    const a: TranscriptEntry = { id: nextId(), role: 'assistant', text: `${i}手目`, toolCalls: [] };
+    const t: TranscriptEntry = {
+      id: nextId(),
+      role: 'tool',
+      text: `結果 ${i} ${'あ'.repeat(800)}`,
+      toolName: 'read_file',
+      ok: true,
+    };
+    return { kind: 'assistant' as const, entries: [a, t] };
+  });
+}
+const knownOf = (us: ReturnType<typeof units>) =>
+  new Set(us.flatMap((u) => u.entries.map((e) => e.id)));
+
+test('圧縮の量: 応答（本文＋思考の枠）を先に取り、残りをログに充てる', () => {
+  const s = { compactAtTokens: 12000, digestReasoningTokens: 8192 };
+  assert.deepEqual(compactionBudget(32768, s), { inputTokens: 16384, outputTokens: 12288 });
+  // 文脈長が小さければ、応答は6割まで。ログはその残り
+  assert.deepEqual(compactionBudget(8192, s), { inputTokens: 2867, outputTokens: 4915 });
+  assert.deepEqual(compactionBudget(null, s), { inputTokens: 9600, outputTokens: 12288 });
+  // 思考の枠を0にすると、以前と同じ（本文の4096だけ）
+  assert.deepEqual(compactionBudget(32768, { ...s, digestReasoningTokens: 0 }), {
+    inputTokens: 16384,
+    outputTokens: 4096,
+  });
+});
+
+test('思考を止められないモデルでも、思考の枠の分だけ上限を広げて圧縮版を書かせる。思考は止めるよう頼む', async () => {
+  const { p, calls } = thinkingDigester(6000);
+  const us = units(3);
+  const r = await compact({
+    provider: p,
+    model: 'm',
+    units: us,
+    previous: null,
+    knownIds: knownOf(us),
+    budgetTokens: 16384,
+    windowTokens: 32768,
+    reasoningTokens: 8192,
+  });
+  assert.equal(r.fallback, undefined, r.notes.join('\n'));
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0]!.reasoning, 'off');
+  assert.equal(calls[0]!.maxTokens, 4096 + 8192);
+});
+
+test('思考の枠でも足りなければ、文脈長の範囲で枠を倍にして1度だけやり直す', async () => {
+  const { p, calls } = thinkingDigester(14000);
+  const us = units(3);
+  const r = await compact({
+    provider: p,
+    model: 'm',
+    units: us,
+    previous: null,
+    knownIds: knownOf(us),
+    budgetTokens: 16384,
+    windowTokens: 65536,
+    reasoningTokens: 8192,
+  });
+  assert.equal(r.fallback, undefined, r.notes.join('\n'));
+  assert.deepEqual(
+    calls.map((c) => c.maxTokens),
+    [4096 + 8192, 4096 + 16384],
+  );
+  assert.ok(
+    calls.every((c) => c.messages.length === 2),
+    '形式の指摘は送らない（上限で切れただけ）',
+  );
+});
+
+test('文脈長が小さくて広げられなければ、ログを分けて送る。それでも駄目なら理由を添えて機械的な要約へ', async () => {
+  // 文脈長 16384。1回目の上限は 12288 弱、倍にしても入りきらない。思考は 15000 要る
+  const { p, calls } = thinkingDigester(15000);
+  const us = units(4);
+  const r = await compact({
+    provider: p,
+    model: 'm',
+    units: us,
+    previous: null,
+    knownIds: knownOf(us),
+    budgetTokens: 4000,
+    windowTokens: 16384,
+    reasoningTokens: 8192,
+  });
+  assert.equal(r.fallback, 'parse-failed');
+  assert.match(r.notes.join('\n'), /モデルの思考が長く、圧縮版を書き終える前に応答の上限/);
+  assert.match(r.notes.join('\n'), /context\.digestReasoningTokens を増やすか、文脈長を伸ばす/);
+  // 分けて送った（4 → 2+2 → 1+1+1+1）。どの呼び出しも文脈長を超える上限を頼んでいない
+  assert.ok(calls.length >= 3, `${calls.length} 回`);
+  for (const c of calls) {
+    const chars = c.messages.reduce((n, m) => n + m.content.length, 0);
+    assert.ok(
+      c.maxTokens! + chars / 2.2 <= 16384,
+      `上限 ${c.maxTokens} + 入力 約${Math.round(chars / 2.2)}`,
+    );
+  }
+  // 機械的な要約には、全部の手が入っている（黙って落とさない）
+  assert.ok(r.digest.confirmed.length > 0);
+});
+
+test('文脈長が分からなければ上限を伸ばさず、そう伝える', async () => {
+  const { p, calls } = thinkingDigester(15000);
+  const us = units(1);
+  const r = await compact({
+    provider: p,
+    model: 'm',
+    units: us,
+    previous: null,
+    knownIds: knownOf(us),
+    budgetTokens: 9600,
+    windowTokens: null,
+    reasoningTokens: 8192,
+  });
+  assert.equal(r.fallback, 'parse-failed');
+  assert.equal(calls.length, 1);
+  assert.match(r.notes.join('\n'), /文脈長が分からないため伸ばしていません/);
 });
