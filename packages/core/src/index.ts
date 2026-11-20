@@ -1,0 +1,334 @@
+/**
+ * @akari/core の公開面。ここに無いものは内部実装として自由に変えてよい。
+ * 仕様: docs/spec/01-architecture.md
+ */
+
+// 設定
+export { loadConfig, saveConfig, type LoadedConfig, type ConfigProblem } from './config/config.js';
+export {
+  configSchema,
+  defaultConfig,
+  describeIssues,
+  CONFIG_SCHEMA_VERSION,
+  type Config,
+  type Endpoint,
+  type EndpointCapabilities,
+  type ModelCapability,
+  type GenerationSettings,
+  type AgentSettings,
+  type ContextSettings,
+  type ServerSettings,
+  type SandboxSettings,
+  type McpServerConfig,
+  type McpAuth,
+  type MemorySettings,
+  mcpServerSchema,
+  type PermissionMode,
+  type Credentials,
+} from './config/schema.js';
+export {
+  loadCredentials,
+  saveCredentials,
+  setKey,
+  removeKey,
+  resolveKey,
+  type ResolvedKey,
+} from './config/credentials.js';
+export {
+  resolveEndpoint,
+  findEndpoint,
+  addEndpoint,
+  removeEndpoint,
+  updateEndpoint,
+  isExternalUrl,
+  type ResolvedEndpoint,
+  type AddEndpointInput,
+} from './config/endpoints.js';
+
+// 接続先
+export {
+  createProvider,
+  getProviderError,
+  buildRequestBody,
+  type ProviderOptions,
+} from './provider/openai.js';
+export {
+  probeEndpoint,
+  resolveToolsMode,
+  isLikelyChatModel,
+  pickChatModel,
+  type ToolsModeResolution,
+} from './provider/probe.js';
+export { SseParser, ToolCallBuffer } from './provider/sse.js';
+export { ThinkSplitter, type SplitResult } from './provider/think.js';
+export {
+  fetchLmStudioModels,
+  mergeLmStudioInfo,
+  lmStudioModelsUrl,
+  type LmStudioModelInfo,
+} from './provider/lmstudio.js';
+export {
+  classifyHttp,
+  classifyNetwork,
+  isRetriableBeforeFirstByte,
+  providerError,
+} from './provider/errors.js';
+export type {
+  Provider,
+  ChatEvent,
+  ChatMessage,
+  ChatRequest,
+  ToolCallRequest,
+  ToolDefinition,
+  ModelInfo,
+  ProviderError,
+  ProviderErrorKind,
+  EndpointProbeResult,
+  FinishReason,
+  ReasoningLevel,
+  OptionalParam,
+  Usage,
+  Role,
+} from './provider/types.js';
+
+// ツール（作業フォルダの境界）
+export {
+  Workspace,
+  isInside,
+  isInsideOrSame,
+  samePath,
+  type AccessMode,
+  type ResolveResult,
+  type ResolveOk,
+  type ResolveDenied,
+} from './tools/workspace.js';
+
+// ツールとエージェント
+export {
+  BUILTIN_TOOLS,
+  ALL_TOOL_NAMES,
+  READ_ONLY_TOOL_NAMES,
+  selectTools,
+  toolDefinitions,
+  findTool,
+} from './tools/registry.js';
+export {
+  DEFAULT_LIMITS,
+  type ToolSpec,
+  type ToolContext,
+  type ToolResult,
+  type ToolLimits,
+  type ToolPreview,
+  type Risk,
+  type McpTrust,
+} from './tools/types.js';
+export {
+  walk,
+  globToRegExp,
+  matchGlob,
+  toPosix,
+  looksBinary,
+  truncateMiddle,
+  DEFAULT_IGNORE_DIRS,
+} from './tools/walk.js';
+export { commandScope, matchesDenied, findDeleteCommand } from './tools/command.js';
+export {
+  ChangeJournal,
+  pruneBackups,
+  sha256OfFile,
+  diffJournal,
+  type FileDiff,
+  type FileChange,
+  type ChangeOp,
+  type UndoResult,
+  type JournalFile,
+} from './agent/journal.js';
+export {
+  detectSandbox,
+  describeSandbox,
+  resetSandboxDetection,
+  seatbeltProfile,
+  bubblewrapArgs,
+  type SandboxStatus,
+  type SandboxKind,
+  type SandboxPolicy,
+} from './tools/sandbox.js';
+export { SECRET_ACCESS_TOOL_NAME } from './tools/secrets.js';
+
+// 記憶（docs/spec/14-memory.md）
+export { fetchEmbeddings, normalize, EmbeddingError } from './provider/embeddings.js';
+export {
+  EndpointEmbedder,
+  sameIdentity,
+  describeIdentity,
+  type Embedder,
+  type EmbeddingIdentity,
+  type EmbedKind,
+} from './memory/embedder.js';
+export { listIndexTargets, type IndexTarget, type TargetList } from './memory/files.js';
+export { chunkText, embedText, CHUNK_STRATEGY, type Chunk } from './memory/chunk.js';
+export {
+  indexDir,
+  loadIndex,
+  readCurrentMeta,
+  removeIndex,
+  hasLeftovers,
+  IndexBusyError,
+  type IndexMeta,
+  type IndexState,
+  type LoadedIndex,
+} from './memory/store.js';
+export {
+  updateIndex,
+  effectiveChunkChars,
+  type UpdateResult,
+  type IndexProgress,
+  type ChangeSummary,
+} from './memory/indexer.js';
+export { searchIndex, formatHits, type SearchHit } from './memory/search.js';
+export { createMemorySearchTool, MEMORY_SEARCH_TOOL_NAME } from './memory/tool.js';
+export {
+  prepareMemory,
+  createEmbedder,
+  MemoryConfigError,
+  type PreparedMemory,
+  type MemoryNotice,
+} from './memory/setup.js';
+
+// MCP（docs/spec/13-mcp.md）
+export {
+  McpHub,
+  uniqueName as mcpToolName,
+  resultText as mcpResultText,
+  type McpServerStatus,
+  type McpServerState,
+  type McpNotice,
+  type McpConnectOptions,
+} from './mcp/hub.js';
+export {
+  mcpFingerprint,
+  consentState,
+  withConsent,
+  describeLaunch,
+  type ConsentState,
+} from './mcp/consent.js';
+export { McpAuthError } from './mcp/auth.js';
+export {
+  decideToolsMode,
+  parsePermission,
+  toolNamesFor,
+  mcpToolsFor,
+  windowTokensFor,
+  type ToolScope,
+  type ToolsModeDecision,
+} from './agent/setup.js';
+export {
+  Session,
+  type SessionOptions,
+  type SessionReconfig,
+  type ContextUsage,
+} from './agent/session.js';
+export type {
+  ConversationRecorder,
+  RecordedMessage,
+  RecordedToolCall,
+  InflightPartial,
+} from './agent/recorder.js';
+
+// 会話の保存（docs/spec/04-chat.md / 07-data.md）
+export {
+  ConversationStore,
+  Conversation,
+  CONVERSATION_SCHEMA_VERSION,
+  textOf,
+  type ConversationHeader,
+  type ConversationKind,
+  type ConversationSettings,
+  type StoredMessage,
+  type StoredToolCall,
+  type MessageMeta,
+  type ContentPart,
+  type RunSummary,
+  type LoadProblem,
+  type NewMessage,
+} from './store/conversations.js';
+export { toApiMessages, toTranscript } from './store/replay.js';
+export { buildApiMessages, type TranscriptEntry } from './agent/transcript.js';
+
+// 文脈の管理と圧縮（docs/spec/16-context.md）
+export {
+  parseDigest,
+  renderDigest,
+  emptyDigest,
+  DIGEST_KEYS,
+  DIGEST_LABELS,
+  type Digest,
+  type DigestItem,
+  type DigestKey,
+  type Compaction,
+  type CompactionFallback,
+} from './context/digest.js';
+export {
+  estimateTokens,
+  compactThreshold,
+  selectForCompaction,
+  splitUnits,
+  CHARS_PER_TOKEN,
+  type Unit,
+} from './context/budget.js';
+export {
+  compact,
+  compactionBudget,
+  DIGEST_ANSWER_TOKENS,
+  type CompactRequest,
+  type CompactResult,
+} from './context/compactor.js';
+export { searchTranscript, formatEntry, RECALL_TOOLS, type RecallHit } from './tools/recall.js';
+export {
+  approvalOptions,
+  type RunEvent,
+  type RunEndReason,
+  type ApprovalDecision,
+  type ApprovalOption,
+  type ToolsMode,
+} from './agent/events.js';
+export {
+  buildSystemPrompt,
+  loadInstructionFiles,
+  extractPromptedCalls,
+  formatPromptedResult,
+  INSTRUCTION_FILES,
+  type LoadedInstruction,
+} from './agent/prompt.js';
+
+// 診断
+export {
+  createLogger,
+  Logger,
+  nullLogger,
+  type LogLevel,
+  type LoggerOptions,
+} from './diagnostics/logger.js';
+export { redact, redactDeep, registerSecret, forgetSecrets } from './diagnostics/redact.js';
+export {
+  collectDiagnostics,
+  formatDiagnostics,
+  type DiagnosticsBundle,
+  type EndpointDiagnostic,
+  type CollectOptions,
+} from './diagnostics/doctor.js';
+
+// 補助
+export { akariHome, paths, ensureDir, tildify } from './util/paths.js';
+export { ulid, shortId } from './util/ids.js';
+export { readJson, writeJsonAtomic, writeFileAtomic } from './util/json.js';
+export {
+  diffLines,
+  formatUnifiedDiff,
+  type DiffResult,
+  type DiffHunk,
+  type DiffLine,
+} from './util/diff.js';
+export { AkariError, isAkariError, messageOf } from './util/errors.js';
+
+export const CORE_VERSION = '0.1.0';

@@ -1,0 +1,321 @@
+#!/usr/bin/env node
+/**
+ * 開発用の模擬ローカルLLMサーバ（OpenAI互換）。
+ * 本物のサーバが手元に無いときに、Akari の動作を確かめるために使う。
+ *
+ *   node tools/mock-llm-server.mjs [ポート]
+ *
+ * 本物のモデルは動かない。入力をなぞった応答をトークンごとに返すだけ。
+ */
+import http from 'node:http';
+
+const port = Number(process.argv[2] ?? 11499);
+// AKARI_MOCK_MODELS でモデル一覧を差し替えられる（LM Studio のように
+// 埋め込みモデルが混ざる状況を再現するため）。
+const MODELS = (process.env.AKARI_MOCK_MODELS ?? 'mock-chat-7b,mock-coder-14b,mock-notools-4b')
+  .split(',')
+  .map((m) => m.trim())
+  .filter(Boolean);
+
+// 埋め込み専用モデルは chat を受け付けない。実物と同じように 400 を返す。
+const isEmbeddingOnly = (id) => /embed|rerank|whisper|tts|bge-|clip/i.test(id);
+
+// エージェントの動作確認用の台本。
+// 「その会話で何ターン目か」で引く。呼び出し回数で数えると、
+// probe や chat の分まで消費してしまい、run が台本の途中から始まってしまう。
+function readScript() {
+  try {
+    return JSON.parse(process.env.AKARI_MOCK_SCRIPT ?? '[]');
+  } catch {
+    return [];
+  }
+}
+
+/** 送られたメッセージの量から、もっともらしい入力トークン数を作る（1トークン≒2.5文字）。 */
+function promptTokens(payload) {
+  return Math.max(1, Math.ceil(JSON.stringify(payload.messages ?? []).length / 2.5));
+}
+
+// AKARI_MOCK_SEQUENTIAL=1 なら、台本を「来た順」に進める（圧縮の確認用）。
+// 既定の「これまでの応答の数」で引く方式は、圧縮で古い応答が減ると台本が巻き戻る。
+let sequentialTurn = 0;
+function turnIndex(payload) {
+  if (process.env.AKARI_MOCK_SEQUENTIAL === '1') return payload.__turn ?? 0;
+  const messages = Array.isArray(payload.messages) ? payload.messages : [];
+  return messages.filter((m) => m && m.role === 'assistant').length;
+}
+
+let embedCalls = 0;
+
+function mockEmbed(text, dims) {
+  const v = new Array(dims).fill(0);
+  const add = (token) => {
+    let h = 2166136261;
+    for (const ch of token) h = Math.imul(h ^ ch.codePointAt(0), 16777619) >>> 0;
+    v[h % dims] += 1;
+  };
+  const body = text.replace(/^\/\/ .*\n/, ''); // 先頭のファイル名の行は、重みを下げるため外す
+  for (const w of body.toLowerCase().match(/[a-z0-9_]{2,}/g) ?? []) add(`w:${w}`);
+  const cjk = [...body].filter((c) => /[\u3040-\u30ff\u3400-\u9fff]/.test(c));
+  for (let i = 0; i + 1 < cjk.length; i++) add(`b:${cjk[i]}${cjk[i + 1]}`);
+  if (v.every((x) => x === 0)) v[0] = 1;
+  return v;
+}
+
+const server = http.createServer((req, res) => {
+  const body = [];
+  req.on('data', (c) => body.push(c));
+  req.on('end', () => {
+    const url = req.url ?? '';
+    const rawBody = Buffer.concat(body).toString('utf8');
+    let payload0 = {};
+    try {
+      payload0 = JSON.parse(rawBody || '{}');
+    } catch {
+      payload0 = {};
+    }
+    // LM Studio 固有の REST API を再現する（AKARI_MOCK_LMSTUDIO=1 のときだけ）
+    if (url.endsWith('/api/v0/models')) {
+      if (process.env.AKARI_MOCK_LMSTUDIO !== '1') {
+        res.writeHead(404, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: 'not found' }));
+        return;
+      }
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          object: 'list',
+          data: MODELS.map((id, i) => ({
+            id,
+            object: 'model',
+            type: /embed/i.test(id) ? 'embeddings' : 'llm',
+            publisher: 'mock',
+            arch: 'qwen3',
+            quantization: 'Q4_K_M',
+            state: i === 0 ? 'loaded' : 'not-loaded',
+            max_context_length: 32768,
+            ...(i === 0 ? { loaded_context_length: 8192 } : {}),
+          })),
+        }),
+      );
+      return;
+    }
+
+    if (url.endsWith('/models')) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          object: 'list',
+          data: MODELS.map((id) => ({
+            id,
+            object: 'model',
+            owned_by: 'mock',
+            // AKARI_MOCK_CONTEXT を設定すると、vLLM のように文脈長を申告する
+            ...(process.env.AKARI_MOCK_CONTEXT
+              ? { max_model_len: Number(process.env.AKARI_MOCK_CONTEXT) }
+              : {}),
+          })),
+        }),
+      );
+      return;
+    }
+    // 埋め込み（14-memory.md）。意味は分からないので、文字の2連と単語の重なりで決まる数値を返す。
+    // 同じ語を含む文どうしが近くなる。AKARI_MOCK_NO_EMBED=1 で「対応していない」（404）。
+    if (url.endsWith('/embeddings')) {
+      if (process.env.AKARI_MOCK_NO_EMBED === '1') {
+        res.writeHead(404, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: 'not found' } }));
+        return;
+      }
+      const input = Array.isArray(payload0.input) ? payload0.input : [String(payload0.input ?? '')];
+      const maxBatch = Number(process.env.AKARI_MOCK_EMBED_MAX_BATCH ?? 0);
+      if (maxBatch > 0 && input.length > maxBatch) {
+        res.writeHead(413, { 'content-type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: 'too many inputs' } }));
+        return;
+      }
+      const dims = Number(process.env.AKARI_MOCK_EMBED_DIMS ?? 256);
+      const delay = Number(process.env.AKARI_MOCK_EMBED_DELAY_MS ?? 0);
+      embedCalls += input.length;
+      setTimeout(() => {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            object: 'list',
+            model: payload0.model,
+            data: input.map((t, index) => ({
+              object: 'embedding',
+              index,
+              embedding: mockEmbed(String(t), dims),
+            })),
+          }),
+        );
+      }, delay);
+      return;
+    }
+    // 埋め込んだ件数（テストで「変わったファイルだけ作り直した」を確かめる）
+    if (url.endsWith('/_mock/embed-calls')) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ count: embedCalls }));
+      return;
+    }
+
+    if (isEmbeddingOnly(String(payload0.model ?? '')) && url.includes('/chat/completions')) {
+      res.writeHead(400, { 'content-type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          error: {
+            message: `Model ${payload0.model} is an embedding model and does not support chat completions.`,
+          },
+        }),
+      );
+      return;
+    }
+
+    if (!url.includes('/chat/completions')) {
+      res.writeHead(404, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: 'not found' } }));
+      return;
+    }
+
+    const payload = payload0;
+    const last = [...(payload.messages ?? [])].reverse().find((m) => m.role === 'user');
+
+    // 文脈の圧縮の依頼（docs/spec/16-context.md）。台本とは別に、決まった形で答える。
+    // AKARI_MOCK_DIGEST=broken なら、形式を守らない答えを返す（退避方法の確認用）。
+    const first = (payload.messages ?? [])[0];
+    if (
+      first &&
+      typeof first.content === 'string' &&
+      first.content.startsWith('あなたは作業記録の要約係')
+    ) {
+      const log = String(payload.messages?.[1]?.content ?? '');
+      const ids = [...log.matchAll(/\[ID ([0-9A-Z]{26})\]/g)].map((m) => m[1]);
+      const digest = {
+        decisions: [{ text: '（模擬）ファイルを順に読む方針にした', sources: ids.slice(0, 1) }],
+        confirmed: [{ text: `（模擬）${ids.length}件のログを確認した`, sources: ids.slice(0, 2) }],
+        rejected: [
+          { text: '（模擬）一括で読む案は、量が多すぎるため棄却', sources: ids.slice(0, 1) },
+        ],
+        open: [],
+        next: [{ text: '（模擬）残りを読む', sources: [] }],
+      };
+      const reply =
+        process.env.AKARI_MOCK_DIGEST === 'broken'
+          ? 'まとめました。（形式を守らない答え）'
+          : '```akari-digest\n' + JSON.stringify(digest) + '\n```';
+      res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
+      res.write(
+        `data: ${JSON.stringify({ id: 'mock', object: 'chat.completion.chunk', model: payload.model, choices: [{ index: 0, delta: { content: reply }, finish_reason: null }] })}\n\n`,
+      );
+      res.write(
+        `data: ${JSON.stringify({ id: 'mock', object: 'chat.completion.chunk', model: payload.model, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] })}\n\n`,
+      );
+      res.write('data: [DONE]\n\n');
+      res.end();
+      return;
+    }
+    if (url.endsWith('/chat/completions')) payload.__turn = sequentialTurn++;
+    // AKARI_MOCK_NO_TOOLS=1 で「ツールを理解しないモデル」を再現する。
+    // Gemma 系のようにツール用テンプレートを持たないモデルの挙動にあたる。
+    // 名前に notool を含むモデルは「ツールを理解しないモデル」として振る舞う。
+    // 1台のサーバで、対応モデルと非対応モデルを並べて比べられるようにするため。
+    const ignoreTools =
+      process.env.AKARI_MOCK_NO_TOOLS === '1' || /notool/i.test(String(payload.model ?? ''));
+    const wantsTool = !ignoreTools && Array.isArray(payload.tools) && payload.tools.length > 0;
+
+    res.writeHead(200, {
+      'content-type': 'text/event-stream',
+      'cache-control': 'no-cache',
+      connection: 'keep-alive',
+    });
+    const send = (delta, finish = null) =>
+      res.write(
+        `data: ${JSON.stringify({ id: 'mock', object: 'chat.completion.chunk', model: payload.model, choices: [{ index: 0, delta, finish_reason: finish }] })}\n\n`,
+      );
+
+    if (wantsTool) {
+      // AKARI_MOCK_SCRIPT に台本を書くと、呼ばれるたびに1つ進む。
+      // 例: '[{"name":"write_file","arguments":{"path":"a.txt","content":"x"}},{"text":"完了"}]'
+      const step = readScript()[turnIndex(payload)] ?? null;
+      if (step && step.text) {
+        for (const piece of [...step.text]) send({ content: piece });
+        send({}, 'stop');
+        res.write('data: [DONE]\n\n');
+        res.end();
+        return;
+      }
+      const name = step?.name ?? payload.tools[0]?.function?.name ?? 'unknown_tool';
+      const toolArgs = JSON.stringify(step?.arguments ?? { label: 'probe' });
+      send({
+        tool_calls: [
+          {
+            index: 0,
+            id: `call_${turnIndex(payload)}`,
+            type: 'function',
+            function: { name, arguments: '' },
+          },
+        ],
+      });
+      send({ tool_calls: [{ index: 0, function: { arguments: toolArgs } }] });
+      send({}, 'tool_calls');
+      if (payload.stream_options?.include_usage) {
+        res.write(
+          // 送られた量に見合った数を返す（いつも同じ数だと、実測で補正する仕組みを誤らせる）
+          `data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: promptTokens(payload), completion_tokens: 8, total_tokens: promptTokens(payload) + 8 } })}\n\n`,
+        );
+      }
+      res.write('data: [DONE]\n\n');
+      res.end();
+      return;
+    }
+
+    // 台本に text があればそれを返す。無ければ入力をなぞった固定文。
+    const scriptedStep = readScript()[turnIndex(payload)] ?? null;
+    let reply;
+    if (typeof scriptedStep?.text === 'string') {
+      reply = scriptedStep.text;
+    } else if (scriptedStep?.name) {
+      // 同じ台本を、ツール非対応モデルでは代替方式のブロックとして出す。
+      // 1つの台本で両方の経路を比べられるようにするため。
+      const block = JSON.stringify({
+        name: scriptedStep.name,
+        arguments: scriptedStep.arguments ?? {},
+      });
+      reply = ['道具を使います。', '```akari-tool', block, '```'].join('\n');
+    } else {
+      reply = `（模擬サーバの応答）受け取った文: ${(last?.content ?? '').slice(0, 60)}\nこれはテスト用の固定応答です。本物のモデルは動いていません。`;
+    }
+    let i = 0;
+    const tokens = [...reply];
+    const timer = setInterval(
+      () => {
+        const piece = tokens.slice(i, i + 3).join('');
+        i += 3;
+        if (piece) send({ content: piece });
+        if (i >= tokens.length) {
+          clearInterval(timer);
+          send({}, 'stop');
+          if (payload.stream_options?.include_usage) {
+            res.write(
+              `data: ${JSON.stringify({ choices: [], usage: { prompt_tokens: 42, completion_tokens: tokens.length, total_tokens: 42 + tokens.length } })}\n\n`,
+            );
+          }
+          res.write('data: [DONE]\n\n');
+          res.end();
+        }
+        // AKARI_MOCK_INTERVAL（ミリ秒）で流す速さを変えられる。生成中に止める操作を試すため
+      },
+      Number(process.env.AKARI_MOCK_INTERVAL ?? 15),
+    );
+    // res の close を見る。req の 'close' は本文を読み終えた時点で発火するため、
+    // ここで使うと送信前に止まってしまう。
+    res.on('close', () => clearInterval(timer));
+  });
+});
+
+server.listen(port, '127.0.0.1', () => {
+  process.stdout.write(
+    `模擬LLMサーバ: http://127.0.0.1:${port}/v1  (モデル: ${MODELS.join(', ')})\n`,
+  );
+});

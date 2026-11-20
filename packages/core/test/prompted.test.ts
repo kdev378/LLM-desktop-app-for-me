@@ -1,0 +1,725 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+import os from 'node:os';
+import {
+  Workspace,
+  Session,
+  extractPromptedCalls,
+  formatPromptedResult,
+  buildSystemPrompt,
+  BUILTIN_TOOLS,
+  type RunEvent,
+  type ChatEvent,
+  type ChatRequest,
+  type Provider,
+} from '../dist/index.js';
+
+/**
+ * ツール呼び出しに対応していないモデル向けの代替方式（prompted）。
+ * Gemma 系のようにツール用テンプレートを持たないモデルでは、こちらが主経路になる。
+ * 仕様: docs/spec/02-provider.md「ツール非対応サーバ向けの代替」
+ */
+
+const fence = (body: string) => '```akari-tool\n' + body + '\n```';
+
+// ---------------- ブロックの取り出し ----------------
+
+test('ブロックからツール呼び出しを取り出す', () => {
+  const r = extractPromptedCalls(
+    `まず読みます。\n${fence('{"name":"read_file","arguments":{"path":"a.ts"}}')}`,
+  );
+  assert.equal(r.errors.length, 0);
+  assert.equal(r.calls.length, 1);
+  assert.equal(r.calls[0]!.name, 'read_file');
+  assert.deepEqual(JSON.parse(r.calls[0]!.argumentsRaw), { path: 'a.ts' });
+});
+
+test('複数のブロックを上から順に取り出す', () => {
+  const r = extractPromptedCalls(
+    fence('{"name":"read_file","arguments":{"path":"a.ts"}}') +
+      '\n次に\n' +
+      fence('{"name":"glob","arguments":{"pattern":"**/*.ts"}}'),
+  );
+  assert.deepEqual(
+    r.calls.map((c) => c.name),
+    ['read_file', 'glob'],
+  );
+});
+
+test('JSONとして読めないブロックは実行せず、エラーとして返す', () => {
+  const r = extractPromptedCalls(fence('{name: read_file}'));
+  assert.equal(r.calls.length, 0);
+  assert.equal(r.errors.length, 1);
+  assert.match(r.errors[0]!, /JSONとして読めません/);
+});
+
+test('name が無いブロックは受け付けない', () => {
+  const r = extractPromptedCalls(fence('{"arguments":{"path":"a.ts"}}'));
+  assert.equal(r.calls.length, 0);
+  assert.match(r.errors[0]!, /name がありません/);
+});
+
+test('arguments が無ければ空オブジェクトとして扱う', () => {
+  const r = extractPromptedCalls(fence('{"name":"list_dir"}'));
+  assert.equal(r.calls.length, 1);
+  assert.deepEqual(JSON.parse(r.calls[0]!.argumentsRaw), {});
+});
+
+test('似ているだけの別のフェンスは拾わない（推測で補正しない）', () => {
+  const text = '```json\n{"name":"delete_file","arguments":{"path":"a.ts"}}\n```';
+  const r = extractPromptedCalls(text);
+  assert.equal(r.calls.length, 0, 'akari-tool 以外のフェンスは実行しない');
+  assert.equal(r.errors.length, 0);
+});
+
+test('普通の文章だけならツール呼び出しは無い', () => {
+  const r = extractPromptedCalls('こんにちは。特に道具は要りません。');
+  assert.equal(r.calls.length, 0);
+  assert.equal(r.errors.length, 0);
+});
+
+test('ツール結果の形式にツール名と成否が入る', () => {
+  const s = formatPromptedResult('read_file', true, '中身');
+  assert.match(s, /\[akari-tool-result\]/);
+  assert.match(s, /"name":"read_file"/);
+  assert.match(s, /"ok":true/);
+});
+
+// ---------------- システムプロンプト ----------------
+
+test('代替方式のときだけ、ブロックの書き方をシステムプロンプトに入れる', () => {
+  const base = {
+    workspaceRoot: '/tmp/x',
+    tools: BUILTIN_TOOLS,
+    instructions: [],
+  };
+  const withPrompted = buildSystemPrompt({ ...base, toolsMode: 'prompted' });
+  const withNative = buildSystemPrompt({ ...base, toolsMode: 'native' });
+  const withBoth = buildSystemPrompt({ ...base, toolsMode: 'both' });
+  assert.match(withPrompted, /akari-tool/);
+  assert.match(withPrompted, /read_file/);
+  assert.ok(!withNative.includes('akari-tool'), 'ネイティブ対応時は代替方式の説明を入れない');
+  assert.match(withBoth, /akari-tool/, '両対応ならブロックの書き方も渡す');
+  assert.match(withBoth, /どちらか片方/, '両方同時に使わせない');
+});
+
+// ---------------- 実行ループ ----------------
+
+/** 台本の文字列をそのまま本文として返す Provider。ツール定義は受け取らない前提。 */
+function textProvider(script: string[]): Provider & { requests: ChatRequest[] } {
+  let turn = 0;
+  const requests: ChatRequest[] = [];
+  return {
+    endpointId: 'ep_prompted',
+    requests,
+    async listModels() {
+      return [{ id: 'gemma-like' }];
+    },
+    async probe() {
+      return {
+        reachable: true,
+        models: [{ id: 'gemma-like' }],
+        tools: 'prompted' as const,
+        usageReported: false,
+        streamsToolCalls: false,
+        testedModel: 'gemma-like',
+        notes: [],
+      };
+    },
+    async *chat(req: ChatRequest): AsyncGenerator<ChatEvent, void, void> {
+      requests.push(req);
+      const text = script[turn++] ?? '終わりです。';
+      yield { type: 'start', model: req.model };
+      yield { type: 'text-delta', text };
+      yield { type: 'finish', reason: 'stop' };
+    },
+  };
+}
+
+async function setup(files: Record<string, string> = {}) {
+  const base = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'akari-prompted-')));
+  const root = path.join(base, 'work');
+  const home = path.join(base, 'home');
+  await fs.mkdir(root, { recursive: true });
+  await fs.mkdir(home, { recursive: true });
+  for (const [p, content] of Object.entries(files)) {
+    await fs.mkdir(path.dirname(path.join(root, p)), { recursive: true });
+    await fs.writeFile(path.join(root, p), content);
+  }
+  return { root, home, workspace: await Workspace.open(root, home) };
+}
+
+async function run(session: Session, input: string): Promise<RunEvent[]> {
+  const events: RunEvent[] = [];
+  for await (const ev of session.send(input)) {
+    events.push(ev);
+    if (ev.type === 'approval-request') session.approve(ev.callId, { kind: 'allow' });
+  }
+  return events;
+}
+
+test('代替方式でもツールが実行され、ファイルが変わる', async () => {
+  const { workspace, home, root } = await setup({ 'a.txt': '元\n' });
+  const provider = textProvider([
+    `直します。\n${fence('{"name":"write_file","arguments":{"path":"a.txt","content":"新\\n"}}')}`,
+    '書き換えました。',
+  ]);
+  const session = Session.create({
+    provider,
+    model: 'gemma-like',
+    workspace,
+    root: home,
+    permissionMode: 'full',
+    toolsMode: 'prompted',
+  });
+  const events = await run(session, '書き換えて');
+  const end = events.find((e) => e.type === 'run-end') as Extract<RunEvent, { type: 'run-end' }>;
+  assert.equal(end.reason, 'done');
+  assert.deepEqual(end.changedFiles, ['a.txt']);
+  assert.equal(await fs.readFile(path.join(root, 'a.txt'), 'utf8'), '新\n');
+});
+
+test('代替方式ではツール定義をリクエストに載せない', async () => {
+  const { workspace, home } = await setup();
+  const provider = textProvider(['道具は要りません。']);
+  const session = Session.create({
+    provider,
+    model: 'gemma-like',
+    workspace,
+    root: home,
+    toolsMode: 'prompted',
+  });
+  await run(session, 'こんにちは');
+  assert.equal(provider.requests[0]!.tools, undefined, 'tools を送らない');
+  assert.match(
+    provider.requests[0]!.messages[0]!.content,
+    /akari-tool/,
+    '代わりにシステムプロンプトへ書く',
+  );
+});
+
+test('代替方式であることを実行開始時に知らせる（動いているふりをしない）', async () => {
+  const { workspace, home } = await setup();
+  const session = Session.create({
+    provider: textProvider(['はい。']),
+    model: 'gemma-like',
+    workspace,
+    root: home,
+    toolsMode: 'prompted',
+  });
+  const events = await run(session, 'やって');
+  const start = events.find((e) => e.type === 'run-start') as Extract<
+    RunEvent,
+    { type: 'run-start' }
+  >;
+  assert.equal(start.toolsMode, 'prompted');
+  assert.ok(
+    events.some((e) => e.type === 'notice' && /代替方式/.test(e.message)),
+    '代替方式で動いていることを通知する',
+  );
+});
+
+test('壊れたブロックはやり直させ、次の応答で実行できる', async () => {
+  const { workspace, home, root } = await setup();
+  const provider = textProvider([
+    fence('{"name": read_file}'), // 壊れている
+    fence('{"name":"write_file","arguments":{"path":"b.txt","content":"直った\\n"}}'),
+    '書きました。',
+  ]);
+  const session = Session.create({
+    provider,
+    model: 'gemma-like',
+    workspace,
+    root: home,
+    permissionMode: 'full',
+    toolsMode: 'prompted',
+  });
+  const events = await run(session, 'やって');
+  assert.ok(events.some((e) => e.type === 'notice' && /JSONとして読めません/.test(e.message)));
+  assert.equal(await fs.readFile(path.join(root, 'b.txt'), 'utf8'), '直った\n');
+  // やり直しを促すメッセージがモデルへ渡っていること
+  const feedback = provider.requests[1]!.messages.map((m) => m.content).join('\n');
+  assert.match(feedback, /\[akari\]/);
+});
+
+test('4個以上のブロックは3個までを実行し、残りを黙って捨てない', async () => {
+  const { workspace, home, root } = await setup();
+  const blocks = ['w', 'x', 'y', 'z']
+    .map((n) => fence(`{"name":"write_file","arguments":{"path":"${n}.txt","content":"${n}"}}`))
+    .join('\n');
+  const session = Session.create({
+    provider: textProvider([blocks, '終わり']),
+    model: 'gemma-like',
+    workspace,
+    root: home,
+    permissionMode: 'full',
+    toolsMode: 'prompted',
+  });
+  const events = await run(session, 'やって');
+  assert.ok(
+    events.some((e) => e.type === 'notice' && /上限 3 個/.test(e.message)),
+    '実行しなかったものを知らせる',
+  );
+  for (const n of ['w', 'x', 'y']) {
+    assert.equal(await fs.readFile(path.join(root, `${n}.txt`), 'utf8'), n);
+  }
+  await assert.rejects(() => fs.stat(path.join(root, 'z.txt')), '4個目は実行されない');
+});
+
+test('代替方式でも作業フォルダの外へは出られない', async () => {
+  const { workspace, home } = await setup();
+  const session = Session.create({
+    provider: textProvider([
+      fence('{"name":"write_file","arguments":{"path":"../escape.txt","content":"x"}}'),
+      'だめでした',
+    ]),
+    model: 'gemma-like',
+    workspace,
+    root: home,
+    permissionMode: 'full',
+    toolsMode: 'prompted',
+  });
+  const events = await run(session, '外に書いて');
+  const result = events.find((e) => e.type === 'tool-result') as Extract<
+    RunEvent,
+    { type: 'tool-result' }
+  >;
+  assert.equal(result.ok, false);
+  assert.match(result.summary, /作業フォルダの外/);
+});
+
+test('代替方式でも承認は効く', async () => {
+  const { workspace, home, root } = await setup({ 'a.txt': '元\n' });
+  const session = Session.create({
+    provider: textProvider([
+      fence('{"name":"write_file","arguments":{"path":"a.txt","content":"新\\n"}}'),
+      '拒否されました',
+    ]),
+    model: 'gemma-like',
+    workspace,
+    root: home,
+    permissionMode: 'ask',
+    toolsMode: 'prompted',
+  });
+  const events: RunEvent[] = [];
+  for await (const ev of session.send('書いて')) {
+    events.push(ev);
+    if (ev.type === 'approval-request') session.approve(ev.callId, { kind: 'deny' });
+  }
+  assert.ok(events.some((e) => e.type === 'approval-request'));
+  assert.equal(await fs.readFile(path.join(root, 'a.txt'), 'utf8'), '元\n');
+});
+
+// ---------------- モデルごとの判定の記憶 ----------------
+
+test('一度判定したモデルは、次からは判定し直さない', async () => {
+  let probeCount = 0;
+  const provider = {
+    endpointId: 'ep',
+    async listModels() {
+      return [{ id: 'a' }];
+    },
+    async probe() {
+      probeCount += 1;
+      return {
+        reachable: true,
+        models: [{ id: 'a' }],
+        tools: 'prompted' as const,
+        usageReported: false,
+        streamsToolCalls: false,
+        testedModel: 'a',
+        notes: [],
+      };
+    },
+    async *chat() {
+      /* 使わない */
+    },
+  } as never;
+
+  const { resolveToolsMode } = await import('../dist/index.js');
+
+  const first = await resolveToolsMode(provider, { tools: 'auto', probedModel: null }, 'a');
+  assert.equal(first.probed, true);
+  assert.equal(first.mode, 'prompted');
+  assert.equal(first.modelCapability?.model, 'a');
+
+  const byModel = { a: first.modelCapability!.value };
+  const second = await resolveToolsMode(
+    provider,
+    { tools: 'prompted', probedModel: 'a', byModel },
+    'a',
+  );
+  assert.equal(second.probed, false, '同じモデルなら判定し直さない');
+  assert.equal(second.mode, 'prompted');
+  assert.equal(probeCount, 1);
+});
+
+test('別のモデルへ切り替えたら判定し直す。前のモデルの記録は残る', async () => {
+  const modes: Record<string, 'native' | 'prompted'> = { small: 'prompted', big: 'native' };
+  const provider = {
+    endpointId: 'ep',
+    async listModels() {
+      return [{ id: 'small' }, { id: 'big' }];
+    },
+    async probe(model?: string) {
+      return {
+        reachable: true,
+        models: [],
+        tools: modes[model ?? 'small']!,
+        usageReported: false,
+        streamsToolCalls: false,
+        testedModel: model ?? 'small',
+        notes: [],
+      };
+    },
+    async *chat() {
+      /* 使わない */
+    },
+  } as never;
+
+  const { resolveToolsMode } = await import('../dist/index.js');
+
+  const a = await resolveToolsMode(provider, { tools: 'auto', probedModel: null }, 'small');
+  assert.equal(a.mode, 'prompted');
+  const byModel: Record<string, { tools: 'native' | 'prompted' | 'none' }> = {
+    small: a.modelCapability!.value,
+  };
+
+  const b = await resolveToolsMode(
+    provider,
+    { tools: 'prompted', probedModel: 'small', byModel },
+    'big',
+  );
+  assert.equal(b.probed, true, '別モデルなら判定し直す');
+  assert.equal(b.mode, 'native');
+  byModel.big = b.modelCapability!.value;
+
+  // 元のモデルへ戻しても、判定し直さない
+  const c = await resolveToolsMode(
+    provider,
+    { tools: 'native', probedModel: 'big', byModel },
+    'small',
+  );
+  assert.equal(c.probed, false);
+  assert.equal(c.mode, 'prompted');
+});
+
+test('判定できない接続先では none を返し、実行させない', async () => {
+  const provider = {
+    endpointId: 'ep',
+    async listModels(): Promise<never> {
+      throw new Error('繋がりません');
+    },
+    async probe() {
+      return {
+        reachable: false,
+        models: [],
+        tools: 'none' as const,
+        usageReported: false,
+        streamsToolCalls: false,
+        testedModel: null,
+        notes: [],
+      };
+    },
+    async *chat() {
+      /* 使わない */
+    },
+  } as never;
+  const { resolveToolsMode } = await import('../dist/index.js');
+  const r = await resolveToolsMode(provider, { tools: 'auto', probedModel: null }, 'x');
+  assert.equal(r.mode, 'none');
+  assert.equal(r.capabilities, undefined, '判定できなかった結果を保存しない');
+});
+
+// ---------------- モデルの自動選択 ----------------
+
+test('埋め込み専用のモデルをチャット用と見なさない', async () => {
+  const { isLikelyChatModel } = await import('../dist/index.js');
+  for (const id of [
+    'nomic-embed-text-v1.5',
+    'text-embedding-3-small',
+    'bge-m3',
+    'jina-reranker-v2',
+    'whisper-large-v3',
+    'kokoro-tts',
+  ]) {
+    assert.equal(isLikelyChatModel(id), false, `${id} はチャット用ではない`);
+  }
+  for (const id of ['qwen3.5-agents-a1-4b', 'gemma3n:e4b', 'llama3.1:8b', 'mock-coder-14b']) {
+    assert.equal(isLikelyChatModel(id), true, `${id} はチャット用`);
+  }
+});
+
+test('モデル未指定のとき、埋め込みモデルを飛ばして会話用を選ぶ', async () => {
+  const { pickChatModel } = await import('../dist/index.js');
+  // LM Studio のように埋め込みモデルが先頭に来る一覧
+  assert.equal(
+    pickChatModel([{ id: 'nomic-embed-text-v1.5' }, { id: 'qwen3.5-agents-a1-4b' }])?.id,
+    'qwen3.5-agents-a1-4b',
+  );
+  // 会話用が無ければ、無理に除外せず先頭を返す（何も選ばないより良い）
+  assert.equal(pickChatModel([{ id: 'nomic-embed-text-v1.5' }])?.id, 'nomic-embed-text-v1.5');
+  assert.equal(pickChatModel([]), null);
+});
+
+test('判定の記録に、どのモデルを使ったかが必ず入る', async () => {
+  const provider = {
+    endpointId: 'ep',
+    async listModels() {
+      return [{ id: 'embed-only' }, { id: 'chat-model' }];
+    },
+    async probe(model?: string) {
+      // 実装と同じ選び方をここでは真似しない。probeEndpoint の責務を直接見る
+      return {
+        reachable: true,
+        models: [],
+        tools: 'native' as const,
+        contextTokens: null,
+        usageReported: false,
+        streamsToolCalls: true,
+        testedModel: model ?? 'chat-model',
+        notes: [],
+      };
+    },
+    async *chat() {
+      /* 使わない */
+    },
+  } as never;
+  const { probeEndpoint } = await import('../dist/index.js');
+  const r = await probeEndpoint(provider, 'ep');
+  assert.equal(r.testedModel, 'chat-model', '埋め込みモデルを選ばない');
+  assert.ok(
+    r.notes.some((n) => n.includes('判定に使ったモデル')),
+    'どのモデルで判定したかを必ず出す',
+  );
+});
+
+test('サーバがツールを受け付けたのにモデルが呼ばなかった場合、それが分かる', async () => {
+  const provider = {
+    endpointId: 'ep',
+    async listModels() {
+      return [{ id: 'no-template-model' }];
+    },
+    async probe() {
+      throw new Error('使わない');
+    },
+    async *chat(): AsyncGenerator<{ type: string; text?: string; reason?: string }, void, void> {
+      yield { type: 'start' };
+      yield { type: 'text-delta', text: 'ツールは使いません。普通に答えます。' };
+      yield { type: 'finish', reason: 'stop' };
+    },
+  } as never;
+  const { probeEndpoint } = await import('../dist/index.js');
+  const r = await probeEndpoint(provider, 'ep');
+  assert.equal(r.tools, 'prompted');
+  const joined = r.notes.join('\n');
+  assert.match(joined, /tools 引数を受け付けましたが、モデルは呼ばず/);
+  assert.match(joined, /テンプレート/, 'なぜそうなるかの手がかりを出す');
+});
+
+// ---------------- 両対応（both） ----------------
+
+/**
+ * 判定で none（＝測れなかった）になったモデルでも道具を使わせるための経路。
+ * 仕様: docs/spec/02-provider.md「両対応（both）」
+ */
+
+test('両対応では、ツール定義を渡しつつ本文ブロックも受け付ける', async () => {
+  const { workspace, home, root } = await setup({ 'a.txt': '元\n' });
+  const provider = textProvider([
+    `直します。\n${fence('{"name":"write_file","arguments":{"path":"a.txt","content":"新\\n"}}')}`,
+    '書き換えました。',
+  ]);
+  const session = Session.create({
+    provider,
+    model: 'gemma-like',
+    workspace,
+    root: home,
+    permissionMode: 'full',
+    toolsMode: 'both',
+  });
+  const events = await run(session, '書き換えて');
+  assert.ok(provider.requests[0]!.tools, '関数呼び出しに対応していれば使えるよう、定義は渡す');
+  assert.match(provider.requests[0]!.messages[0]!.content, /akari-tool/, 'ブロックの書き方も渡す');
+  const end = events.find((e) => e.type === 'run-end') as Extract<RunEvent, { type: 'run-end' }>;
+  assert.equal(end.reason, 'done');
+  assert.equal(await fs.readFile(path.join(root, 'a.txt'), 'utf8'), '新\n', 'ブロックで実行される');
+});
+
+test('両対応で本文ブロックを使ったら、結果も同じ形式で返す', async () => {
+  const { workspace, home } = await setup({ 'a.txt': '中身\n' });
+  const provider = textProvider([
+    fence('{"name":"read_file","arguments":{"path":"a.txt"}}'),
+    '読みました。',
+  ]);
+  const session = Session.create({
+    provider,
+    model: 'gemma-like',
+    workspace,
+    root: home,
+    permissionMode: 'full',
+    toolsMode: 'both',
+  });
+  await run(session, '読んで');
+  // 2回目のリクエストに、ブロック方式の結果が利用者メッセージとして入っていること。
+  // ここで role:'tool' を混ぜると、tool_calls の無い会話としてサーバに 400 で弾かれる。
+  const second = provider.requests[1]!.messages;
+  assert.ok(
+    !second.some((m) => m.role === 'tool'),
+    '本文ブロックで呼ばれたものに tool メッセージを返さない',
+  );
+  assert.ok(second.some((m) => m.role === 'user' && /akari-tool-result/.test(m.content)));
+});
+
+test('両対応で判定できていないことを実行開始時に知らせる', async () => {
+  const { workspace, home } = await setup();
+  const session = Session.create({
+    provider: textProvider(['はい。']),
+    model: 'gemma-like',
+    workspace,
+    root: home,
+    toolsMode: 'both',
+  });
+  const events = await run(session, 'やって');
+  const start = events.find((e) => e.type === 'run-start') as Extract<
+    RunEvent,
+    { type: 'run-start' }
+  >;
+  assert.equal(start.toolsMode, 'both');
+  assert.ok(
+    events.some((e) => e.type === 'notice' && /両対応/.test(e.message)),
+    '確認できていないことを隠さない',
+  );
+});
+
+test('両対応で関数呼び出しが来たら、本文のブロックは見ない（二重実行しない）', async () => {
+  const { workspace, home, root } = await setup();
+  let turn = 0;
+  const provider = {
+    endpointId: 'ep_both',
+    async listModels() {
+      return [{ id: 'm' }];
+    },
+    async probe(): Promise<never> {
+      throw new Error('使わない');
+    },
+    async *chat(req: ChatRequest): AsyncGenerator<ChatEvent, void, void> {
+      const t = turn++;
+      yield { type: 'start', model: req.model };
+      if (t === 0) {
+        // 関数呼び出しと、同じ意味の本文ブロックを両方出してくるモデル
+        yield {
+          type: 'text-delta',
+          text: fence('{"name":"write_file","arguments":{"path":"block.txt","content":"x"}}'),
+        };
+        yield {
+          type: 'tool-call',
+          id: 'call_1',
+          name: 'write_file',
+          argumentsRaw: JSON.stringify({ path: 'native.txt', content: 'x' }),
+        };
+        yield { type: 'finish', reason: 'tool_calls' };
+      } else {
+        yield { type: 'text-delta', text: '終わりです。' };
+        yield { type: 'finish', reason: 'stop' };
+      }
+    },
+  } satisfies Provider;
+  const session = Session.create({
+    provider,
+    model: 'm',
+    workspace,
+    root: home,
+    permissionMode: 'full',
+    toolsMode: 'both',
+  });
+  await run(session, 'やって');
+  assert.equal(await fs.readFile(path.join(root, 'native.txt'), 'utf8'), 'x');
+  await assert.rejects(
+    () => fs.stat(path.join(root, 'block.txt')),
+    'すでに関数呼び出しが来ているなら本文は読まない',
+  );
+});
+
+// ---------------- 考えてから答えるモデルの判定 ----------------
+
+/**
+ * 思考に「budget」トークン使ってから道具を呼ぶモデル。
+ * 応答の上限が思考の量より小さいと、思考の途中で打ち切られる。
+ */
+function thinkingProvider(budget: number) {
+  return {
+    endpointId: 'ep',
+    async listModels() {
+      return [{ id: 'thinker' }];
+    },
+    async probe() {
+      throw new Error('使わない');
+    },
+    async *chat(req: ChatRequest): AsyncGenerator<ChatEvent, void, void> {
+      yield { type: 'start', model: req.model };
+      const limit = req.maxTokens ?? Infinity;
+      yield { type: 'reasoning-delta', text: 'う'.repeat(Math.min(budget, limit)) };
+      if (limit <= budget) {
+        yield { type: 'finish', reason: 'length' };
+        return;
+      }
+      yield { type: 'tool-call', id: 'c1', name: 'akari_probe_number', argumentsRaw: '{}' };
+      yield { type: 'finish', reason: 'tool_calls' };
+    },
+  } as never;
+}
+
+test('考えてから道具を呼ぶモデルを、思考の途中で打ち切って「判定できず」にしない', async () => {
+  // 実際に OpenRouter の cohere/north-mini-code で、判定が「応答が空」になったのに
+  // 実行では普通に道具を呼べていた
+  const { probeEndpoint } = await import('../dist/index.js');
+  const r = await probeEndpoint(thinkingProvider(300), 'ep');
+  assert.equal(r.tools, 'native');
+});
+
+test('思考だけで上限に達したときは「応答が空」ではなく、そう伝える', async () => {
+  const { probeEndpoint } = await import('../dist/index.js');
+  const r = await probeEndpoint(thinkingProvider(100_000), 'ep');
+  assert.equal(r.tools, 'none', '判定できなかったことは変わらない');
+  const joined = r.notes.join('\n');
+  assert.match(joined, /考えている途中で上限/);
+  assert.doesNotMatch(joined, /応答が空/);
+});
+
+test('道具を含むリクエストに 404（道具に対応した提供元が無い）が返ったら、拒否として本文ブロック方式に切り替える', async () => {
+  // OpenRouter で、道具に対応しないモデル（Nex-N2.5-Mini）にこう返された。
+  // 以前は「モデルが見つかりません」と出て「判定できていません」になり、run が動かなかった
+  const { classifyHttp, probeEndpoint } = await import('../dist/index.js');
+  const body = JSON.stringify({
+    error: { message: 'No endpoints found that support tool use.', code: 404 },
+  });
+  const e = classifyHttp(404, body, { endpointId: 'ep' });
+  assert.equal(e.kind, 'bad_request');
+  assert.match(e.message, /道具の呼び出しを受け付けませんでした/);
+  assert.match(e.message, /--tools-mode prompted/, '動かし方を言う');
+
+  const provider = {
+    endpointId: 'ep',
+    async listModels() {
+      return [{ id: 'no-tools' }];
+    },
+    async probe() {
+      throw new Error('使わない');
+    },
+    async *chat() {
+      yield { type: 'start' };
+      yield { type: 'error', error: { ...e, bodyExcerpt: body } };
+    },
+  } as never;
+  const r = await probeEndpoint(provider, 'ep');
+  assert.equal(r.tools, 'prompted');
+
+  // 道具と関係ない 404 は、これまでどおり「モデルが見つからない」
+  assert.equal(
+    classifyHttp(404, '{"error":"model not found"}', { endpointId: 'ep' }).kind,
+    'model_not_found',
+  );
+});

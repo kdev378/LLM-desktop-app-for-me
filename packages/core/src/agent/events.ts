@@ -1,0 +1,119 @@
+import type { Risk, ToolPreview } from '../tools/types.js';
+import type { FileChange } from './journal.js';
+import type { ProviderError, Usage } from '../provider/types.js';
+
+/**
+ * 実行のイベント。仕様: docs/spec/05-agent.md
+ *
+ * 画面・ターミナル・--json・ハーネスAPI は、**すべてこの1本の列**から作る。
+ * 「同じはず」ではなく「同じ情報から作る」ため。
+ */
+
+export type PermissionMode = 'ask' | 'autoEdit' | 'full';
+
+/**
+ * 道具の渡し方（docs/spec/02-provider.md）。
+ * native   … 標準の関数呼び出しだけ
+ * prompted … 本文の ```akari-tool ブロックだけ
+ * both     … 両方受け付ける（対応が確認できていないとき）
+ */
+export type ToolsMode = 'native' | 'prompted' | 'both';
+
+export type ApprovalOption = {
+  /** 端末で押す1文字。UIではボタンのラベルに使う。 */
+  key: string;
+  label: string;
+  decision: ApprovalDecision;
+};
+
+export type ApprovalDecision =
+  | { kind: 'allow' }
+  | { kind: 'allow-session'; scope: string }
+  | { kind: 'deny'; feedback?: string }
+  | { kind: 'abort' };
+
+/** 'context-full' … 圧縮しても文脈に入りきらず止めた（16-context.md）。 */
+export type RunEndReason =
+  'done' | 'aborted' | 'max-steps' | 'error' | 'denied' | 'loop' | 'context-full';
+
+export type RunEvent =
+  | {
+      type: 'run-start';
+      runId: string;
+      workspace: string;
+      model: string;
+      permissionMode: PermissionMode;
+      instructionFiles: string[];
+      toolNames: string[];
+      /** 道具の渡し方（docs/spec/02-provider.md）。 */
+      toolsMode: ToolsMode;
+      /** 記録先の会話（保存するときだけ）。続きを指定するのに使う。 */
+      conversationId?: string;
+      /** コマンドの閉じ込め（05-agent.md）。コマンドを渡すときだけ。閉じ込めないならその理由。 */
+      sandbox?:
+        { active: true; kind: 'seatbelt' | 'bubblewrap' } | { active: false; reason: string };
+    }
+  | { type: 'step-start'; step: number }
+  | { type: 'text-delta'; text: string }
+  | { type: 'reasoning-delta'; text: string }
+  | {
+      type: 'tool-call';
+      callId: string;
+      name: string;
+      args: unknown;
+      risk: Risk;
+      preview?: ToolPreview;
+    }
+  | {
+      type: 'approval-request';
+      callId: string;
+      name: string;
+      risk: Risk;
+      prompt: string;
+      options: ApprovalOption[];
+      preview?: ToolPreview;
+    }
+  | { type: 'approval-resolved'; callId: string; decision: ApprovalDecision }
+  | { type: 'tool-start'; callId: string; name: string }
+  | { type: 'tool-output'; callId: string; stream: 'stdout' | 'stderr'; text: string }
+  | {
+      type: 'tool-result';
+      callId: string;
+      name: string;
+      ok: boolean;
+      summary: string;
+      change?: FileChange;
+    }
+  | { type: 'step-end'; step: number; usage?: Usage }
+  /** 文脈の圧縮（docs/spec/16-context.md「イベント」）。 */
+  | { type: 'compaction-start'; turns: number; beforeTokens: number; estimated: boolean }
+  | {
+      type: 'compaction-end';
+      compactionId: string;
+      afterTokens: number;
+      estimated: boolean;
+      fallback?: string;
+    }
+  | { type: 'notice'; level: 'info' | 'warn'; message: string }
+  /** 実行中に差し込まれた利用者の追記が、モデルへ渡った（12-harness-api.md「messages」）。 */
+  | { type: 'user-message'; text: string }
+  | {
+      type: 'run-end';
+      reason: RunEndReason;
+      changedFiles: string[];
+      error?: ProviderError | string;
+    };
+
+export function approvalOptions(scope: string | null): ApprovalOption[] {
+  const opts: ApprovalOption[] = [{ key: 'y', label: '許可', decision: { kind: 'allow' } }];
+  if (scope) {
+    opts.push({
+      key: 'a',
+      label: `この実行中は ${scope} を許可`,
+      decision: { kind: 'allow-session', scope },
+    });
+  }
+  opts.push({ key: 'n', label: '拒否', decision: { kind: 'deny' } });
+  opts.push({ key: 'q', label: '実行を中止', decision: { kind: 'abort' } });
+  return opts;
+}

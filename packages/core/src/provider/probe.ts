@@ -1,0 +1,332 @@
+import { getProviderError } from './openai.js';
+import type {
+  EndpointProbeResult,
+  ModelInfo,
+  Provider,
+  ProviderError,
+  ToolDefinition,
+} from './types.js';
+
+/**
+ * 判定で許す応答の長さ。64 だと、考えてから答えるモデルが思考だけで使い切り、
+ * 道具を呼ぶ前に終わっていた（OpenRouter の cohere/north-mini-code で実際に起きた）。
+ * 判定はモデルごとに1回だけで結果を覚えるので、長めにしても毎回の負担にはならない。
+ */
+const PROBE_MAX_TOKENS = 512;
+
+/**
+ * 接続先の実力を調べる。仕様: docs/spec/02-provider.md
+ *
+ * 判定は「その時点のモデルに対する結果」であることを notes に必ず書く。
+ * 判定できなかったものを、できたことにしない。
+ */
+
+/** 埋め込み・再ランク・音声専用のモデル。chat を投げても失敗する。 */
+const NON_CHAT_PATTERN =
+  /(^|[-_./])(embed|embedding|rerank|reranker|whisper|tts|bge|clip|moderation)([-_./]|$)/i;
+
+export function isLikelyChatModel(id: string): boolean {
+  return !NON_CHAT_PATTERN.test(id);
+}
+
+/**
+ * モデル未指定のときに使うモデルを選ぶ。
+ * 一覧の先頭をそのまま使うと、LM Studio のように埋め込みモデルが混ざる環境で
+ * chat を投げられないモデルを掴む。会話に使えそうなものを先に選ぶ。
+ */
+export function pickChatModel(models: ModelInfo[]): ModelInfo | null {
+  return models.find((m) => isLikelyChatModel(m.id)) ?? models[0] ?? null;
+}
+
+const PROBE_TOOL: ToolDefinition = {
+  name: 'akari_probe_number',
+  description: 'テスト用。呼び出すと固定の数値を返す。',
+  parameters: {
+    type: 'object',
+    properties: { label: { type: 'string', description: '任意のラベル' } },
+    required: [],
+  },
+};
+
+export async function probeEndpoint(
+  provider: Provider,
+  endpointId: string,
+  model?: string,
+  signal?: AbortSignal,
+): Promise<EndpointProbeResult> {
+  const notes: string[] = [];
+
+  // 1. /models
+  let models;
+  try {
+    models = await provider.listModels(signal);
+  } catch (err) {
+    const pe = getProviderError(err);
+    return {
+      reachable: false,
+      models: [],
+      tools: 'none',
+      contextTokens: null,
+      usageReported: false,
+      streamsToolCalls: false,
+      testedModel: null,
+      notes: ['/models を取得できませんでした。これ以降の判定は行っていません。'],
+      error: pe ?? ({ kind: 'unreachable', message: String(err), endpointId } as ProviderError),
+    };
+  }
+  notes.push(`/models: ${models.length}件`);
+
+  const chosen = model
+    ? (models.find((m) => m.id === model) ?? { id: model })
+    : pickChatModel(models);
+  const testedModel = chosen?.id ?? null;
+  if (!testedModel) {
+    return {
+      reachable: true,
+      models,
+      tools: 'none',
+      contextTokens: null,
+      usageReported: false,
+      streamsToolCalls: false,
+      testedModel: null,
+      notes: [...notes, 'モデルが1件も無いため、生成とツールの判定はできていません。'],
+    };
+  }
+  const chosenState =
+    chosen && 'state' in chosen ? (chosen as { state?: string }).state : undefined;
+  // どのモデルで判定したのかを、成功しても失敗しても必ず出す。
+  notes.push(
+    model
+      ? `判定に使ったモデル: ${testedModel}（指定）`
+      : `判定に使ったモデル: ${testedModel}（未指定のため自動で選択。-m で指定できます）`,
+  );
+  if (chosenState !== undefined && chosenState !== 'loaded') {
+    notes.push(
+      `注意: ${testedModel} はサーバ上で読み込まれていません（state: ${chosenState}）。判定と実行で挙動が変わることがあります。`,
+    );
+  }
+  if (!isLikelyChatModel(testedModel)) {
+    notes.push(
+      `注意: ${testedModel} は埋め込み等の専用モデルに見えます。会話用のモデルを -m で指定してください。`,
+    );
+  }
+  const contextTokens = chosen && 'contextTokens' in chosen ? (chosen.contextTokens ?? null) : null;
+
+  // 2. ツール呼び出しを1つだけ渡して、呼ばれるかを見る
+  let sawToolCall = false;
+  let sawText = false;
+  // 考えてから答えるモデルは、思考だけで上限を使い切ることがある。
+  // 数えておかないと「応答が空」と区別できない。
+  let reasoningLength = 0;
+  let finishReason: string | undefined;
+  let usageReported = false;
+  let usage: { prompt: number; completion: number; total: number } | undefined;
+  let textLength = 0;
+  let error: ProviderError | undefined;
+  let rejectedTools = false;
+
+  try {
+    for await (const ev of provider.chat(
+      {
+        model: testedModel,
+        messages: [
+          {
+            role: 'system',
+            content: 'あなたはツールを使う助手です。必要なら必ずツールを呼びます。',
+          },
+          { role: 'user', content: 'akari_probe_number を呼んで、その結果を教えてください。' },
+        ],
+        tools: [PROBE_TOOL],
+        maxTokens: PROBE_MAX_TOKENS,
+        temperature: 0,
+      },
+      signal,
+    )) {
+      if (ev.type === 'tool-call') sawToolCall = true;
+      else if (ev.type === 'text-delta') {
+        sawText = true;
+        textLength += ev.text.length;
+      } else if (ev.type === 'reasoning-delta') {
+        reasoningLength += ev.text.length;
+      } else if (ev.type === 'finish') {
+        finishReason = ev.reason;
+        if (ev.usage) {
+          usageReported = true;
+          usage = ev.usage;
+        }
+      } else if (ev.type === 'error') {
+        error = ev.error;
+        if (ev.error.kind === 'bad_request' && /tool|function/i.test(ev.error.bodyExcerpt ?? '')) {
+          rejectedTools = true;
+        }
+        break;
+      }
+    }
+  } catch (err) {
+    error = getProviderError(err) ?? undefined;
+  }
+
+  let tools: EndpointProbeResult['tools'];
+  if (sawToolCall) {
+    tools = 'native';
+    notes.push(`ツール呼び出し: 対応（${testedModel} で確認）`);
+  } else if (rejectedTools) {
+    tools = 'prompted';
+    notes.push(
+      'ツール呼び出し: サーバが tools 引数そのものを拒否しました。代替方式（prompted）になります。',
+    );
+  } else if (error) {
+    tools = 'none';
+    notes.push(`ツール判定: 生成でエラーが出たため判定できていません（${error.message}）`);
+    notes.push('  → 実行時は両対応（関数呼び出しと本文ブロックの両方）で試します。');
+    if (error.bodyExcerpt) notes.push(`サーバの応答: ${error.bodyExcerpt.slice(0, 300)}`);
+  } else if (sawText) {
+    tools = 'prompted';
+    notes.push(
+      `ツール呼び出し: サーバは tools 引数を受け付けましたが、モデルは呼ばず本文だけを返しました（${textLength}文字）。代替方式（prompted）になります。`,
+    );
+    notes.push(
+      '  → 多くの場合、そのモデルの配布物にツール呼び出し用のテンプレートが入っていません。' +
+        '同じモデルでも配布元によって変わります。代替方式でも動きますが、失敗しやすくなります。',
+    );
+  } else if (reasoningLength > 0) {
+    tools = 'none';
+    notes.push(
+      `ツール判定: モデルが考えている途中で${finishReason === 'length' ? `上限（${PROBE_MAX_TOKENS}トークン）に達し、` : ''}` +
+        `ツールも本文も出しませんでした（思考 ${reasoningLength}文字）。判定できていません。`,
+    );
+    notes.push('  → 実行時は両対応（関数呼び出しと本文ブロックの両方）で試します。');
+  } else {
+    tools = 'none';
+    notes.push('ツール判定: 応答が空でした。判定できていません。');
+    notes.push('  → 実行時は両対応（関数呼び出しと本文ブロックの両方）で試します。');
+  }
+
+  notes.push(
+    usageReported && usage
+      ? `トークン数: サーバが報告します（この判定で 入力${usage.prompt} + 出力${usage.completion}）`
+      : 'トークン数: サーバが報告しないため、以後は概算になります',
+  );
+  notes.push(
+    contextTokens !== null
+      ? `文脈長: ${contextTokens.toLocaleString()} トークン（サーバの申告）`
+      : '文脈長: サーバが返さないため不明。akari config endpoints probe -m <モデル> --context <数値> で設定できます',
+  );
+  notes.push('この判定は上のモデルに対する結果です。別のモデルでは変わることがあります。');
+
+  return {
+    reachable: true,
+    models,
+    tools,
+    contextTokens,
+    usageReported,
+    streamsToolCalls: sawToolCall,
+    testedModel,
+    notes,
+    ...(error ? { error } : {}),
+  };
+}
+
+/**
+ * 使うモデルに対して、ツール呼び出しの方式を確定させる。
+ *
+ * `capabilities.tools` が `auto` のまま実行すると、ツール非対応のモデルへ
+ * ネイティブのツール定義を渡し、モデルが何も呼ばずに終わる（＝何も起きない）。
+ * それを避けるため、未判定なら実行前に1度だけ判定する。
+ *
+ * 判定はモデルごとに変わる（docs/spec/02-provider.md）ので、
+ * 前に判定したモデルと違うときも判定し直す。
+ */
+export type ToolsModeResolution = {
+  mode: 'native' | 'prompted' | 'none';
+  /** 今回あらためて判定したか。false なら保存済みの値をそのまま使った。 */
+  probed: boolean;
+  notes: string[];
+  /** 判定した場合、保存すべき新しい capabilities（最後に判定したモデルの写し）。 */
+  capabilities?: {
+    tools: 'native' | 'prompted' | 'none';
+    usageReported: boolean;
+    streamsToolCalls: boolean;
+    probedAt: string;
+    probedModel: string;
+  };
+  /** 判定した場合、byModel へ足すべき1件。 */
+  modelCapability?: {
+    model: string;
+    value: {
+      tools: 'native' | 'prompted' | 'none';
+      usageReported: boolean;
+      streamsToolCalls: boolean;
+      contextTokens: number | null;
+      probedAt: string;
+    };
+  };
+};
+
+export async function resolveToolsMode(
+  provider: Provider,
+  current: {
+    tools: 'auto' | 'native' | 'prompted' | 'none';
+    probedModel: string | null;
+    byModel?: Record<string, { tools: 'native' | 'prompted' | 'none' }>;
+  },
+  model: string,
+  signal?: AbortSignal,
+): Promise<ToolsModeResolution> {
+  // このモデルを前に判定していれば、それを使う。行き来しても判定し直さない。
+  const remembered = current.byModel?.[model];
+  if (remembered) {
+    return { mode: remembered.tools, probed: false, notes: [] };
+  }
+  // 記録が無くても、最後の判定が同じモデルに対するものならそれで足りる（古い設定との互換）
+  if (current.tools !== 'auto' && current.probedModel === model) {
+    return { mode: current.tools, probed: false, notes: [] };
+  }
+
+  const why =
+    current.tools === 'auto' && current.probedModel === null
+      ? 'ツール呼び出しへの対応が未判定のため'
+      : `${model} はまだ判定していないため`;
+
+  // Provider の口を通す。中身は probeEndpoint と同じだが、
+  // インターフェース越しにしておくと差し替えと検証がしやすい。
+  const result = await provider.probe(model, signal);
+  if (!result.reachable) {
+    // 判定できなかった。動くふりをせず、そのまま伝える。
+    return {
+      mode: 'none',
+      probed: false,
+      notes: [`${why}判定を試みましたが、接続先に到達できませんでした。`],
+    };
+  }
+
+  const probedAt = new Date().toISOString();
+  return {
+    mode: result.tools,
+    probed: true,
+    notes: [`${why}、${model} で判定しました: ${describeMode(result.tools)}`, ...result.notes],
+    capabilities: {
+      tools: result.tools,
+      usageReported: result.usageReported,
+      streamsToolCalls: result.streamsToolCalls,
+      probedAt,
+      probedModel: model,
+    },
+    modelCapability: {
+      model,
+      value: {
+        tools: result.tools,
+        usageReported: result.usageReported,
+        streamsToolCalls: result.streamsToolCalls,
+        contextTokens: result.contextTokens,
+        probedAt,
+      },
+    },
+  };
+}
+
+function describeMode(mode: 'native' | 'prompted' | 'none'): string {
+  if (mode === 'native') return 'ツール呼び出しに対応';
+  if (mode === 'prompted') return '非対応のため代替方式（prompted）を使います';
+  return '判定できませんでした（両対応で試します）';
+}

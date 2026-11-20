@@ -1,0 +1,305 @@
+# 動かし方
+
+現在できるのは **ターミナルの中で、ローカルLLMと会話し、作業フォルダの中で手を動かさせること**まで
+（対話画面と、スクリプト向けのヘッドレスのコマンド）。
+外部のツールから頼む口（ハーネスAPI・MCP）と、作業フォルダの索引（記憶）もある。デスクトップアプリ、Web はまだ無い（`docs/spec/11-roadmap.md`）。
+
+## 用意するもの
+
+- Node.js 22 以上
+- pnpm 9 以上（`corepack enable pnpm` で入る）
+- ローカルLLMサーバ 1つ。無くても、同梱の模擬サーバで一通り試せる。
+
+## 準備
+
+`akari` 本体（`apps/cli/dist/index.js`）は、ソースから組み立てて作るファイルなので Git には入っていない。
+取ってきた直後は無いのが正常。リポジトリの直下で組み立てる:
+
+```sh
+pnpm install   # 必要な部品を入れる（初回と、依存が変わったとき）
+pnpm build     # apps/cli/dist/index.js ができる
+node apps/cli/dist/index.js --version   # 「0.1.0 (dev)」と出れば準備完了
+```
+
+`git pull` で新しくしたときも、組み立て直さないと古いまま動く:
+
+```sh
+git pull && pnpm install && pnpm build
+```
+
+### `akari` と打てるようにする（一度だけ）
+
+```sh
+cd apps/cli && npm link && cd ../..
+akari --version          # どのフォルダからでも、ターミナルを開き直しても使える
+```
+
+`npm link` は、このリポジトリの組み立て結果を指す `akari` コマンドを置くだけ。
+以後 `pnpm build` し直せば、`akari` もそのまま新しくなる（`npm link` のやり直しは要らない）。
+やめるときは `npm unlink -g @akari/cli`。
+
+`npm link` が権限のエラーで失敗するなら（Node を公式のインストーラで入れた Mac など）、
+代わりに alias をシェルの設定に書く。リポジトリの直下で:
+
+```sh
+echo "alias akari=\"node $PWD/apps/cli/dist/index.js\"" >> ~/.zshrc   # bash なら ~/.bashrc
+source ~/.zshrc
+```
+
+`alias` をターミナルで打っただけだと、そのターミナルを閉じると消える。
+
+以降このファイルでは `akari` と書く（`node apps/cli/dist/index.js` と同じ）。
+
+## 本物のローカルLLMに繋ぐ
+
+サーバごとの既定URL:
+
+| サーバ                     | ベースURL                   |
+| -------------------------- | --------------------------- |
+| Ollama                     | `http://localhost:11434/v1` |
+| llama.cpp (`llama-server`) | `http://localhost:8080/v1`  |
+| LM Studio                  | `http://localhost:1234/v1`  |
+| vLLM                       | `http://localhost:8000/v1`  |
+
+```sh
+node apps/cli/dist/index.js config endpoints add \
+  --name "ローカル" --url http://localhost:11434/v1
+
+node apps/cli/dist/index.js doctor     # 到達するか、何に対応しているか
+node apps/cli/dist/index.js models     # モデル一覧
+node apps/cli/dist/index.js chat       # 対話（/exit で終了）
+```
+
+期待される結果:
+
+- `doctor` … 接続先の行が緑の `●` になり、`/models: N件` と、ツール呼び出しに対応しているかが出る。
+- `models` … モデル名が並ぶ。
+- `chat` … `> ` が出て、入力するとトークンが少しずつ流れて表示される。`Ctrl+C` で生成を止められる。
+
+繋がらないときは、原因の種類（到達不可 / 鍵 / 非互換）が分けて表示される。
+`akari doctor --export akari-diagnostics.txt` で、鍵と会話本文を除いた診断が1ファイルに出る。
+
+## 本物が無いときの確認（模擬サーバ）
+
+```sh
+node tools/mock-llm-server.mjs 11499       # 別の端末で起動したままにする
+```
+
+```sh
+export AKARI_HOME=/tmp/akari-try           # 本番の設定を汚さない
+node apps/cli/dist/index.js config endpoints add --name "模擬" --url http://127.0.0.1:11499/v1
+node apps/cli/dist/index.js doctor
+node apps/cli/dist/index.js chat -p "テストです"
+```
+
+模擬サーバは入力をなぞった固定文を返すだけで、モデルは動いていない。
+Akari 側の挙動（ストリーム表示、エラー分類、設定、診断）を確かめるためのもの。
+
+### エージェントの動きを試す
+
+模擬サーバに台本を渡すと、決まった順でツールを呼ばせられる。
+
+```sh
+AKARI_MOCK_SCRIPT='[
+  {"name":"read_file","arguments":{"path":"main.ts"}},
+  {"name":"edit_file","arguments":{"path":"main.ts","oldText":"1000","newText":"5000"}},
+  {"text":"直しました"}
+]' node tools/mock-llm-server.mjs 11499
+```
+
+## 対話画面で使う（ふだんはこれ）
+
+```sh
+cd ~/なにかのリポジトリ
+akari
+```
+
+期待される結果:
+
+- 枠の中に、接続先・モデル・作業フォルダ・権限・会話が出て、下に入力欄が出る。
+- 入力して Enter で送る。相談でも作業の依頼でもよい（道具が要るかはモデルが決める）。
+  改行は Shift+Enter。macOS 標準のターミナルでは効かないので、Ctrl+J か、行末に `\` を打って Enter。
+- ファイルを書き換える前と、コマンドを実行する前に、差分つきの承認の枠が出る。↑↓ と Enter か、`y` / `n` で答える。
+- 生成中は Esc で止まる。Ctrl+C を2回で終了し、続きの始め方（`akari -c`）が出る。
+- `/help` で操作の一覧。`/undo` で直前の1回の変更を戻せる。
+
+ホームフォルダで起動すると、ファイルを触らない会話だけになる（理由が出る）。
+操作の一覧は [commands.md の「`akari` — 対話画面」](commands.md)。
+
+## 1回だけ実行する（ヘッドレス）
+
+スクリプトの中や、1回頼んで終わりにしたいときは `run`。
+
+```sh
+cd ~/なにかのリポジトリ
+akari run "README のtypoを直して"
+```
+
+期待される結果:
+
+- 使う接続先・モデル・作業フォルダ・権限モードが最初の1行に出る。
+- ツールを使うたびに `read_file main.ts` のような行が出て、結果が `✓` / `✗` で続く。
+- **ファイルを書き換える前と、コマンドを実行する前に承認を求められる。**
+  差分が出るので、見てから `y`（許可）/ `a`（以後このファイルは許可）/ `n`（拒否）/ `q`（中止）を選ぶ。
+- 終わると「変更したファイル」と、元に戻すコマンドが出る。
+
+```sh
+akari diff        # その実行が何を変えたか
+akari undo        # 元に戻す（確認あり。-y で確認なし）
+akari runs        # 過去の実行の一覧
+```
+
+### 安全の仕組み（実際に確かめられます）
+
+| やってみること | 起きること |
+|---|---|
+| `akari run -C ~ "…"` | ホームディレクトリは範囲が広すぎるので断られる |
+| モデルが `../` で外を触ろうとする | 承認画面すら出ずに拒否される（`--permission full` でも） |
+| `akari run "…" < /dev/null`（パイプの中） | 承認が要る操作は自動で拒否され、終了コード3で終わる |
+| 実行後に自分でファイルを直してから `akari undo` | そのファイルは上書きされず「手で変更されています」と報告される |
+
+### モデルの指定
+
+4通りある。下ほど強い。
+
+```sh
+# 1. 接続先の既定にする（一度やれば以後ずっと）
+akari config endpoints add --name L --url http://localhost:1234/v1 --model qwen3.5-agents-a1-4b
+
+# 2. 環境変数
+export AKARI_MODEL=qwen3.5-agents-a1-4b
+
+# 3. -m / --model。サブコマンドの前でも後ろでもよい
+akari -m qwen3.5-agents-a1-4b run "テストを通して"
+akari run -m qwen3.5-agents-a1-4b "テストを通して"
+
+# 4. 判定のときだけ別のモデルを見る
+akari config endpoints probe -m qwen3.5-agents-a1-4b
+```
+
+**指定しないと自動で選びます。** そのとき、埋め込み専用のモデル
+（`nomic-embed-text` など）は飛ばしますが、複数の会話用モデルがあるなら
+どれが選ばれたかは実行開始時の行で確認してください。
+
+### 権限モード
+
+| 指定 | 読み取り | 書き込み | コマンド | 削除 |
+|---|---|---|---|---|
+| （既定）`--permission ask` | 自動 | 承認 | 承認 | 承認 |
+| `--permission auto-edit`（`-y`） | 自動 | 自動 | 承認 | 承認 |
+| `--permission full` | 自動 | 自動 | 自動 | 承認 |
+
+### ツールを渡さない
+
+`--no-tools` を付けると、モデルに道具を渡さず生成だけ行う。
+**ファイルは一切変わらない。** モデル単体の出力を見たいときに使う。
+
+`--read-only` なら読み取り系（`read_file` / `list_dir` / `glob` / `grep`）だけを渡す。
+調べさせたいが書き換えさせたくないときに使う。
+
+### 応答が遅いとき
+
+ローカルのサーバは、モデルを読み込んで入力を処理し終えてから最初のトークンを出す。
+`run` は道具の定義と指示ファイルを毎回送るので、`chat` よりここが長い。
+数B級のモデルでも初回は数分かかることがある。既定は300秒（5分）待つ。
+
+足りなければ延ばす。
+
+```sh
+akari run --timeout 900 "直して"            # この1回だけ15分
+akari config endpoints set --timeout 900    # 以後ずっと15分
+```
+
+`endpoints set` は接続先のIDと判定結果を保つ。
+待ち時間を変えたいだけで `rm` して `add` し直すと、
+モデルごとのツール判定と文脈長の記録まで消えるので注意。
+
+### 道具の呼ばせ方
+
+判定でツール対応が分からなかったモデルでも、実行は止まらず**両対応**で走る。
+標準の関数呼び出しの定義を渡しつつ、本文にブロックを書く方法も説明し、
+返ってきたほうを使う。確認できていないことは実行開始時に表示される。
+
+自分で決めたいときは `--tools-mode` を使う。
+
+```sh
+akari run --tools-mode native "直して"     # 関数呼び出しだけ（対応が分かっているとき）
+akari run --tools-mode prompted "直して"   # 本文のブロックだけ
+akari run --tools-mode both "直して"       # 両方（判定を待たない）
+```
+
+`full` でも、ファイルの道具は作業フォルダの外に触れず、削除は必ず確認を求めます。
+コマンドは閉じ込めの中で動き（macOS / Linux。実行の最初に `コマンド: 閉じ込めあり` と出る）、
+作業フォルダの外への書き込みと、`~/.ssh` や `.env` などの秘密の読み取りが塞がれます。
+`.env` が要るときは、モデルが理由を添えてあなたに許可を求めます。
+詳しくは [commands.md の「コマンドの閉じ込め」](commands.md#コマンドの閉じ込め)。
+
+## いま使えるコマンド
+
+引数まで含めた完全な一覧は **[docs/commands.md](commands.md)**。ここでは概要だけ。
+
+
+| コマンド | 何をするか |
+|---|---|
+| `config endpoints add/list/rm/use/probe` | 接続先の登録・切替・機能判定 |
+| `config list/get/set` | 設定の確認と変更（範囲外の値は変更せずに拒否する） |
+| （なし） | 対話画面。相談も作業の依頼も1つの入力欄で |
+| `models` | モデル一覧 |
+| `chat` | 対話。ファイルは触らない |
+| `run` | エージェント実行。会話は保存され、`-c` で続きから |
+| `diff` / `undo` / `runs` | 実行が変えたものの確認・取り消し・一覧 |
+| `conversations` | 保存した会話の一覧・表示・削除 |
+| `digest` / `recall` | 文脈の圧縮版を見る・圧縮した生の記録を探す |
+| `doctor` | 状態の確認。`--export` で診断の書き出し |
+| `serve` | ハーネスAPI。外部のツールから HTTP で頼めるようにする（この PC の中からだけ） |
+| `mcp` | 外部の MCP サーバの道具を使う（`add` / `list` / `tools` / `doctor`）。`mcp serve` で Akari の道具を Claude Code などへ出す |
+| `index` | 作業フォルダの索引（意味の近さで探す記憶）。今は外部の埋め込みモデルを使う |
+
+`web` は未実装。
+実行すると「まだ実装されていません」と出る。
+
+## 保存される場所
+
+| OS      | 場所                                   |
+| ------- | -------------------------------------- |
+| Windows | `%APPDATA%\Akari\`                     |
+| macOS   | `~/Library/Application Support/Akari/` |
+| Linux   | `~/.config/akari/`                     |
+
+`AKARI_HOME` で変えられる。中身は JSON なので、そのまま開いて読める。
+
+**鍵について**: `credentials.json` に平文で保存される（ファイル権限600）。
+暗号化ではない。外部APIの鍵は `--key-env 変数名` を使い、環境変数から読ませるほうがよい。
+
+## 実機で一通り確かめる
+
+本物のローカルLLMに対して、接続・生成・ツール対応の判定・エージェント実行・取り消しを
+まとめて確かめる。**本番の設定は汚さず、書き換わるのはその場で作る使い捨てフォルダの中だけ。**
+
+```sh
+# モデルを並べると、最後に比較表が出る
+bash tools/verify-local-llm.sh http://localhost:11434/v1 gemma3n:e4b lfm2.5 agents-a1-4b
+
+# モデルを省くと、サーバの一覧の先頭3つを試す
+bash tools/verify-local-llm.sh http://localhost:11434/v1
+```
+
+結果は `akari-verify-report.txt` に出る。そのまま貼れる（鍵とあなたのファイルの中身は入らない）。
+
+見るべきは最後の比較表:
+
+| ツール対応 | 意味 |
+|---|---|
+| `native` | そのまま使える。いちばん良い |
+| `prompted` | 代替方式へ自動で切り替わる。「エージェント実行」が成功していれば実用になる |
+| `判定できず` | 非対応と分かったわけではなく、測れなかっただけ。実行時は両対応で試すので、「エージェント実行」が `成功` なら使える |
+
+「エージェント実行」が `成功` なら、そのモデルで Akari が使えます。
+
+## 開発
+
+```sh
+pnpm typecheck      # 型検査
+pnpm test           # 全テスト
+pnpm format         # 整形
+```

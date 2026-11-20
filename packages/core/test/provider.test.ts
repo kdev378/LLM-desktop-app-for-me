@@ -1,0 +1,373 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import { createProvider, getProviderError } from '../dist/index.js';
+import { startFakeServer } from './fake-server.ts';
+
+function endpoint(url: string, over: Record<string, unknown> = {}) {
+  return {
+    id: 'ep_test',
+    name: 'テスト',
+    baseUrl: url,
+    apiKeyRef: null,
+    defaultModel: 'test-model',
+    headers: {},
+    timeoutMs: 5000,
+    externalConsent: false,
+    apiKey: null,
+    isExternal: false,
+    capabilities: {
+      tools: 'auto',
+      vision: 'auto',
+      usageReported: false,
+      streamsToolCalls: false,
+      probedAt: null,
+      probedModel: null,
+    },
+    ...over,
+  } as never;
+}
+
+async function collect(gen: AsyncIterable<unknown>) {
+  const out: unknown[] = [];
+  for await (const ev of gen) out.push(ev);
+  return out as Array<Record<string, unknown>>;
+}
+
+const req = { model: 'test-model', messages: [{ role: 'user' as const, content: 'hi' }] };
+
+test('モデル一覧を取得できる', async () => {
+  const s = await startFakeServer();
+  s.setModels(['zeta', 'alpha']);
+  const models = await createProvider(endpoint(s.url)).listModels();
+  assert.equal(models.length, 2);
+  assert.equal(models[0].ownedBy, 'fake');
+  await s.close();
+});
+
+test('本文をトークン単位で流し、finish で終わる', async () => {
+  const s = await startFakeServer({ kind: 'text', chunks: ['こん', 'にちは'], usage: true });
+  const events = await collect(createProvider(endpoint(s.url)).chat(req));
+  assert.equal(events[0].type, 'start');
+  assert.deepEqual(
+    events.filter((e) => e.type === 'text-delta').map((e) => e.text),
+    ['こん', 'にちは'],
+  );
+  const finish = events.at(-1)!;
+  assert.equal(finish.type, 'finish');
+  assert.equal(finish.reason, 'stop');
+  assert.deepEqual(finish.usage, { prompt: 11, completion: 22, total: 33 });
+  await s.close();
+});
+
+test('ツール呼び出しの断片を連結して1回で出す', async () => {
+  const s = await startFakeServer({
+    kind: 'toolCall',
+    name: 'read_file',
+    argChunks: ['{"path"', ':"a.ts"}'],
+  });
+  const events = await collect(createProvider(endpoint(s.url)).chat(req));
+  const calls = events.filter((e) => e.type === 'tool-call');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].name, 'read_file');
+  assert.equal(calls[0].argumentsRaw, '{"path":"a.ts"}');
+  assert.equal(events.at(-1)!.reason, 'tool_calls');
+  await s.close();
+});
+
+test('stream_options を拒否されたら1度だけ外して再送する', async () => {
+  const s = await startFakeServer({
+    kind: 'rejectStreamOptions',
+    then: { kind: 'text', chunks: ['ok'] },
+  });
+  const events = await collect(createProvider(endpoint(s.url)).chat(req));
+  assert.deepEqual(
+    events.filter((e) => e.type === 'text-delta').map((e) => e.text),
+    ['ok'],
+  );
+  const chatReqs = s.requests.filter((r) => r.path.endsWith('/chat/completions'));
+  assert.equal(chatReqs.length, 2);
+  assert.ok((chatReqs[0].body as Record<string, unknown>).stream_options);
+  assert.equal((chatReqs[1].body as Record<string, unknown>).stream_options, undefined);
+  await s.close();
+});
+
+test('401 は unauthorized として分類する', async () => {
+  const s = await startFakeServer({
+    kind: 'status',
+    status: 401,
+    body: '{"error":{"message":"bad key"}}',
+  });
+  const events = await collect(createProvider(endpoint(s.url)).chat(req));
+  const err = events.at(-1)!;
+  assert.equal(err.type, 'error');
+  assert.equal((err.error as Record<string, unknown>).kind, 'unauthorized');
+  await s.close();
+});
+
+test('SSEでない200応答は incompatible として分類する', async () => {
+  const s = await startFakeServer({ kind: 'notSse', body: '<html>nginx</html>' });
+  const events = await collect(createProvider(endpoint(s.url)).chat(req));
+  const err = events.at(-1)!;
+  assert.equal(err.type, 'error');
+  assert.equal((err.error as Record<string, unknown>).kind, 'incompatible');
+  await s.close();
+});
+
+test('stream:true を無視して一括JSONを返すサーバでも本文を取り出す', async () => {
+  const s = await startFakeServer({ kind: 'jsonCompletion', content: 'まとめて返した' });
+  const events = await collect(createProvider(endpoint(s.url)).chat(req));
+  assert.deepEqual(
+    events.filter((e) => e.type === 'text-delta').map((e) => e.text),
+    ['まとめて返した'],
+  );
+  assert.equal(events.at(-1)!.reason, 'stop');
+  await s.close();
+});
+
+test('トークンを受け取った後に切断されたら、再試行せず受信済みを残す', async () => {
+  const s = await startFakeServer({ kind: 'cutOff', chunks: ['途中', 'まで'] });
+  const events = await collect(createProvider(endpoint(s.url)).chat(req));
+  assert.deepEqual(
+    events.filter((e) => e.type === 'text-delta').map((e) => e.text),
+    ['途中', 'まで'],
+  );
+  // 再送していない = リクエストは1回だけ
+  assert.equal(s.requests.filter((r) => r.path.endsWith('/chat/completions')).length, 1);
+  await s.close();
+});
+
+test('到達できない接続先は unreachable になる', async () => {
+  const events = await collect(createProvider(endpoint('http://127.0.0.1:1/v1')).chat(req));
+  const err = events.at(-1)!;
+  assert.equal(err.type, 'error');
+  assert.equal((err.error as Record<string, unknown>).kind, 'unreachable');
+});
+
+test('中断すると aborted になり、以降のイベントが出ない', async () => {
+  const s = await startFakeServer({ kind: 'hang' });
+  const ac = new AbortController();
+  setTimeout(() => ac.abort(), 50);
+  const events = await collect(createProvider(endpoint(s.url)).chat(req, ac.signal));
+  const last = events.at(-1)!;
+  assert.equal(last.type, 'error');
+  assert.equal((last.error as Record<string, unknown>).kind, 'aborted');
+  await s.close();
+});
+
+test('Authorization ヘッダに鍵が載る', async () => {
+  const s = await startFakeServer();
+  await createProvider(endpoint(s.url, { apiKey: 'sk-testkey1234567890' })).listModels();
+  assert.equal(s.requests[0].headers.authorization, 'Bearer sk-testkey1234567890');
+  await s.close();
+});
+
+test('listModels の失敗は ProviderError を持った例外になる', async () => {
+  try {
+    await createProvider(endpoint('http://127.0.0.1:1/v1')).listModels();
+    assert.fail('例外になるはず');
+  } catch (err) {
+    assert.equal(getProviderError(err)?.kind, 'unreachable');
+  }
+});
+
+test('本文に混ざった <think> は思考として分けて流す', async () => {
+  const s = await startFakeServer({
+    kind: 'text',
+    chunks: ['<thi', 'nk>ここは', '思考</th', 'ink>答えは', '2です。'],
+  });
+  const events = await collect(createProvider(endpoint(s.url)).chat(req));
+  const text = events
+    .filter((e) => e.type === 'text-delta')
+    .map((e) => e.text)
+    .join('');
+  const reasoning = events
+    .filter((e) => e.type === 'reasoning-delta')
+    .map((e) => e.text)
+    .join('');
+  assert.equal(text, '答えは2です。');
+  assert.equal(reasoning, 'ここは思考');
+  await s.close();
+});
+
+test('思考タグが無い応答は、チャンクの区切りどおりに流れる', async () => {
+  // 思考の切り出しのために出力を溜め込んでいないことの確認
+  const s = await startFakeServer({ kind: 'text', chunks: ['一', '二', '三'] });
+  const events = await collect(createProvider(endpoint(s.url)).chat(req));
+  assert.deepEqual(
+    events.filter((e) => e.type === 'text-delta').map((e) => e.text),
+    ['一', '二', '三'],
+  );
+  await s.close();
+});
+
+test('モデル一覧はサーバの順序を保つ（並べ替えない）', async () => {
+  const s = await startFakeServer();
+  s.setModels(['zeta', 'alpha', 'mid']);
+  const models = await createProvider(endpoint(s.url)).listModels();
+  assert.deepEqual(
+    models.map((m) => m.id),
+    ['zeta', 'alpha', 'mid'],
+    'サーバの順序には意味がある（読み込み中のモデルが先頭など）ので並べ替えない',
+  );
+  await s.close();
+});
+
+// ---------------- 待ち時間（ローカルサーバのモデル読み込み） ----------------
+
+/**
+ * ローカルのサーバは、モデルを読み込み終わるまで応答ヘッダを返さないことがある。
+ * その待ちを「接続できない」と切ってはいけない。
+ * 仕様: docs/spec/02-provider.md「段階別のタイムアウト」
+ */
+
+test('応答ヘッダが遅れても、接続先の待ち上限までは待つ', async () => {
+  const s = await startFakeServer({
+    kind: 'slowHeaders',
+    delayMs: 300,
+    then: { kind: 'text', chunks: ['読み込めた'] },
+  });
+  const events = await collect(createProvider(endpoint(s.url, { timeoutMs: 3000 })).chat(req));
+  const text = events
+    .filter((e) => e.type === 'text-delta')
+    .map((e) => e.text)
+    .join('');
+  assert.equal(text, '読み込めた', 'モデルの読み込み待ちで切らない');
+  assert.ok(!events.some((e) => e.type === 'error'), 'エラーにしない');
+  await s.close();
+});
+
+test('待ち上限を超えたら、延ばし方を添えて止める', async () => {
+  const s = await startFakeServer({
+    kind: 'slowHeaders',
+    delayMs: 5000,
+    then: { kind: 'text', chunks: ['間に合わない'] },
+  });
+  const events = await collect(createProvider(endpoint(s.url, { timeoutMs: 1000 })).chat(req));
+  const err = events.at(-1)!;
+  assert.equal(err.type, 'error');
+  const e = err.error as Record<string, string>;
+  assert.equal(e.kind, 'unreachable');
+  assert.match(e.message, /1 秒以内に来ませんでした/, '実際の上限を出す');
+  assert.match(e.message, /config endpoints set --timeout/, '直し方を出す');
+  await s.close();
+});
+
+// ---------------- 思考量の指定 ----------------
+
+/**
+ * 思考（reasoning）の量。サーバによって受け付ける口が違い、
+ * 理解しないサーバは 400 を返す。仕様: docs/spec/02-provider.md「思考量の指定」
+ */
+
+test('off はテンプレート側の切り替えで送る', async () => {
+  const s = await startFakeServer();
+  await collect(createProvider(endpoint(s.url)).chat({ ...req, reasoning: 'off' }));
+  const body = s.requests.at(-1)!.body as Record<string, unknown>;
+  assert.deepEqual(body.chat_template_kwargs, { enable_thinking: false });
+  assert.equal(body.reasoning_effort, undefined, '両方は送らない');
+  await s.close();
+});
+
+test('low / medium / high は reasoning_effort で送る', async () => {
+  const s = await startFakeServer();
+  for (const level of ['low', 'medium', 'high'] as const) {
+    await collect(createProvider(endpoint(s.url)).chat({ ...req, reasoning: level }));
+    const body = s.requests.at(-1)!.body as Record<string, unknown>;
+    assert.equal(body.reasoning_effort, level);
+    assert.equal(body.chat_template_kwargs, undefined);
+  }
+  await s.close();
+});
+
+test('指定しなければ何も送らない（サーバの既定に任せる）', async () => {
+  const s = await startFakeServer();
+  await collect(createProvider(endpoint(s.url)).chat(req));
+  const body = s.requests.at(-1)!.body as Record<string, unknown>;
+  assert.equal(body.reasoning_effort, undefined);
+  assert.equal(body.chat_template_kwargs, undefined);
+  await s.close();
+});
+
+test('受け付けないサーバでは外して送り直し、効かないことを知らせる', async () => {
+  const s = await startFakeServer({
+    kind: 'rejectParam',
+    param: 'reasoning_effort',
+    then: { kind: 'text', chunks: ['思考なしで答えます'] },
+  });
+  const events = await collect(createProvider(endpoint(s.url)).chat({ ...req, reasoning: 'high' }));
+  const notice = events.find((e) => e.type === 'notice');
+  assert.ok(notice, '黙って落とさない');
+  assert.match(notice!.message as string, /reasoning_effort/);
+  assert.match(notice!.message as string, /思考量の指定は効きません/, '何が効かないかを言う');
+  const text = events
+    .filter((e) => e.type === 'text-delta')
+    .map((e) => e.text)
+    .join('');
+  assert.equal(text, '思考なしで答えます', '外したうえで生成は成功する');
+  // 2回目のリクエストには載っていないこと
+  assert.equal((s.requests.at(-1)!.body as Record<string, unknown>).reasoning_effort, undefined);
+  await s.close();
+});
+
+test('送っていないパラメータを名指しされても、無限に送り直さない', async () => {
+  // reasoning を指定していないので reasoning_effort は載っていない。
+  // それでも名前が出てくる 400 に対して、落とすものが無いまま回り続けないこと。
+  const s = await startFakeServer({
+    kind: 'status',
+    status: 400,
+    body: JSON.stringify({ error: { message: "unknown field 'reasoning_effort'" } }),
+  });
+  const events = await collect(createProvider(endpoint(s.url)).chat(req));
+  assert.equal(events.at(-1)!.type, 'error');
+  assert.ok(s.requests.length <= 4, `送り直しすぎ: ${s.requests.length}回`);
+  await s.close();
+});
+
+// ---------------- モデル一覧の時間切れ ----------------
+
+/**
+ * 中断されるまで返らない fetch。中断されたら本物と同じ AbortError を投げる。
+ * 本物の通信中はソケットがプロセスを生かしているが、ここには無いので、
+ * 待っている間だけイベントループを保つ（タイマーは unref されている）。
+ */
+function hangingFetch(): typeof fetch {
+  return ((_url: unknown, init?: { signal?: AbortSignal }) =>
+    new Promise((_resolve, reject) => {
+      const keep = setInterval(() => {}, 1000);
+      init?.signal?.addEventListener('abort', () => {
+        clearInterval(keep);
+        reject(Object.assign(new Error('aborted'), { name: 'AbortError' }));
+      });
+    })) as unknown as typeof fetch;
+}
+
+test('モデル一覧の時間切れを「中断しました」と報告しない', async () => {
+  // 実際に OpenRouter（464件）で、初回の一覧取得が時間切れなのに
+  // 「中断しました」と出て、利用者が止めたように見えた
+  const p = createProvider(endpoint('http://127.0.0.1:1/v1'), {
+    fetchImpl: hangingFetch(),
+    listTimeoutMs: 100,
+  });
+  const err = await p.listModels().then(
+    () => null,
+    (e: unknown) => getProviderError(e),
+  );
+  assert.ok(err);
+  assert.equal(err.kind, 'unreachable', '時間切れは「繋がらない」の側（終了コード4）');
+  assert.match(err.message, /モデル一覧が .* 秒以内に返りませんでした/);
+  assert.doesNotMatch(err.message, /中断/);
+});
+
+test('利用者が止めたときは、モデル一覧でも「中断」と報告する', async () => {
+  const p = createProvider(endpoint('http://127.0.0.1:1/v1'), {
+    fetchImpl: hangingFetch(),
+    listTimeoutMs: 10_000,
+  });
+  const ac = new AbortController();
+  setTimeout(() => ac.abort(), 50);
+  const err = await p.listModels(ac.signal).then(
+    () => null,
+    (e: unknown) => getProviderError(e),
+  );
+  assert.equal(err?.kind, 'aborted');
+});

@@ -1,0 +1,253 @@
+{
+  "about": "埋め込みモデルの比較用の問題集。対象はこのリポジトリの commit の時点のファイル。正解はファイル単位（どれか1つが上位に出れば当たり）。docs/spec/14-memory.md「モデルの選び方」",
+  "commit": "202953c2aadc1d54408c346e7dd616aa7800edc5",
+  "queries": [
+    {
+      "id": "ja-doc-01",
+      "kind": "ja→文書",
+      "q": "モデルがファイルを削除しようとしたときに、権限に関係なく必ず確認を取る理由",
+      "gold": ["docs/spec/05-agent.md"]
+    },
+    {
+      "id": "ja-doc-02",
+      "kind": "ja→文書",
+      "q": "対話画面で改行を入れるにはどのキーを押せばいいか",
+      "gold": ["docs/spec/17-interactive.md", "docs/commands.md", "docs/getting-started.md"]
+    },
+    {
+      "id": "ja-doc-03",
+      "kind": "ja→文書",
+      "q": "外部のツールからHTTPで実行を頼むときの、認証の鍵の置き場所",
+      "gold": ["docs/spec/12-harness-api.md", "docs/commands.md"]
+    },
+    {
+      "id": "ja-doc-04",
+      "kind": "ja→文書",
+      "q": "会話が長くなったとき、古いやり取りをどうまとめて残すのか",
+      "gold": ["docs/spec/16-context.md"]
+    },
+    {
+      "id": "ja-doc-05",
+      "kind": "ja→文書",
+      "q": "設定ファイルの保存場所は OS ごとにどう違うか",
+      "gold": ["docs/spec/03-config.md", "docs/spec/07-data.md", "docs/getting-started.md"]
+    },
+    {
+      "id": "ja-doc-06",
+      "kind": "ja→文書",
+      "q": "ブラウザでログインする認証方式をまだ入れない理由",
+      "gold": ["docs/spec/13-mcp.md"]
+    },
+    {
+      "id": "ja-doc-07",
+      "kind": "ja→文書",
+      "q": "ベクトルデータベースを使わずに全部と比べる方式にした根拠",
+      "gold": ["docs/spec/14-memory.md"]
+    },
+    {
+      "id": "ja-doc-08",
+      "kind": "ja→文書",
+      "q": "オーナーはコードを読まないので、報告では何を根拠として示すべきか",
+      "gold": ["context/personal/working-with-me.md", "context/core.md"]
+    },
+    {
+      "id": "ja-doc-09",
+      "kind": "ja→文書",
+      "q": "外部の道具のサーバを登録するとき、利用者に見せる同意の文",
+      "gold": ["docs/spec/13-mcp.md", "docs/commands.md"]
+    },
+    {
+      "id": "ja-doc-10",
+      "kind": "ja→文書",
+      "q": "Web検索と取得の機能はどう作る予定か",
+      "gold": ["docs/spec/15-web.md"]
+    },
+    {
+      "id": "ja-doc-11",
+      "kind": "ja→文書",
+      "q": "ログに鍵や会話の本文を残さないための決まり",
+      "gold": ["docs/spec/09-security.md"]
+    },
+    {
+      "id": "ja-doc-12",
+      "kind": "ja→文書",
+      "q": "LM Studio の実機で確かめる手順と、うまくいかないときに報告してほしいこと",
+      "gold": ["docs/testing.md"]
+    },
+    {
+      "id": "ja-doc-13",
+      "kind": "ja→文書",
+      "q": "デスクトップアプリの画面の構成と見た目の方針",
+      "gold": ["docs/spec/08-ui.md", "context/personal/ui.md"]
+    },
+    {
+      "id": "ja-doc-14",
+      "kind": "ja→文書",
+      "q": "プロジェクトに資料を添付して、それを踏まえて作業させる機能",
+      "gold": ["docs/spec/06-work-and-code.md"]
+    },
+
+    {
+      "id": "ja-code-01",
+      "kind": "ja→コード",
+      "q": "外部の道具のサーバの子プロセスを、孫のプロセスまで含めて止める処理",
+      "gold": ["packages/core/src/mcp/stdio.ts"]
+    },
+    {
+      "id": "ja-code-02",
+      "kind": "ja→コード",
+      "q": "ファイルを書き換える前に元の中身を控えて、あとでまとめて元に戻す",
+      "gold": ["packages/core/src/agent/journal.ts"]
+    },
+    {
+      "id": "ja-code-03",
+      "kind": "ja→コード",
+      "q": "作業フォルダの外を指すパスを拒否する判定。シンボリックリンクも実体で確かめる",
+      "gold": ["packages/core/src/tools/workspace.ts"]
+    },
+    {
+      "id": "ja-code-04",
+      "kind": "ja→コード",
+      "q": "モデルの考えている途中の文を、答えの本文から切り分ける",
+      "gold": ["packages/core/src/provider/think.ts"]
+    },
+    {
+      "id": "ja-code-05",
+      "kind": "ja→コード",
+      "q": "サーバから少しずつ届く応答の断片を、道具の呼び出しの形に組み立て直す",
+      "gold": ["packages/core/src/provider/sse.ts"]
+    },
+    {
+      "id": "ja-code-06",
+      "kind": "ja→コード",
+      "q": "同じ道具を同じ引数で何度も呼んだら、堂々巡りとみなして止める",
+      "gold": ["packages/core/src/agent/session.ts"]
+    },
+    {
+      "id": "ja-code-07",
+      "kind": "ja→コード",
+      "q": "macOS でコマンドを閉じ込めるための規則の文字列を組み立てる",
+      "gold": ["packages/core/src/tools/sandbox.ts"]
+    },
+    {
+      "id": "ja-code-08",
+      "kind": "ja→コード",
+      "q": "ログや診断の書き出しに出す前に、鍵らしい文字列を伏字にする",
+      "gold": ["packages/core/src/diagnostics/redact.ts"]
+    },
+    {
+      "id": "ja-code-09",
+      "kind": "ja→コード",
+      "q": "古い会話をモデルに要約させ、決定・確認済み・棄却案・未解決・次の行動に分けて残す",
+      "gold": ["packages/core/src/context/compactor.ts", "packages/core/src/context/digest.ts"]
+    },
+    {
+      "id": "ja-code-10",
+      "kind": "ja→コード",
+      "q": "索引の更新を途中で止めても、前の版がそのまま使えるように差し替える",
+      "gold": ["packages/core/src/memory/store.ts", "packages/core/src/memory/indexer.ts"]
+    },
+    {
+      "id": "ja-code-11",
+      "kind": "ja→コード",
+      "q": "実行ごとに git の作業用のコピーとブランチを作る",
+      "gold": ["apps/server/src/worktree.ts"]
+    },
+    {
+      "id": "ja-code-12",
+      "kind": "ja→コード",
+      "q": "チャットに貼れるように、要約を指定の字数以下に分ける。コードブロックの途中では分けない",
+      "gold": ["apps/server/src/transcript.ts"]
+    },
+    {
+      "id": "ja-code-13",
+      "kind": "ja→コード",
+      "q": "入力欄で文字を消したり、カーソルを左右に動かしたりする処理",
+      "gold": ["apps/cli/src/tui/editor.ts"]
+    },
+    {
+      "id": "ja-code-14",
+      "kind": "ja→コード",
+      "q": "接続先のアドレスがこの PC の外（インターネット上）かどうかを判定する",
+      "gold": ["packages/core/src/config/endpoints.ts"]
+    },
+
+    {
+      "id": "en-code-01",
+      "kind": "en→コード",
+      "q": "constant-time comparison of the API bearer token",
+      "gold": ["apps/server/src/access.ts"]
+    },
+    {
+      "id": "en-code-02",
+      "kind": "en→コード",
+      "q": "reject requests whose Host header is not a loopback address, to prevent DNS rebinding",
+      "gold": ["apps/server/src/access.ts"]
+    },
+    {
+      "id": "en-code-03",
+      "kind": "en→コード",
+      "q": "resume a server-sent event stream from the last event id the client saw",
+      "gold": ["apps/server/src/server.ts", "apps/server/src/runs.ts"]
+    },
+    {
+      "id": "en-code-04",
+      "kind": "en→コード",
+      "q": "write a file atomically through a temporary file, fsync and rename",
+      "gold": ["packages/core/src/util/json.ts"]
+    },
+    {
+      "id": "en-code-05",
+      "kind": "en→コード",
+      "q": "classify HTTP error responses from the model server into error kinds",
+      "gold": ["packages/core/src/provider/errors.ts"]
+    },
+    {
+      "id": "en-code-06",
+      "kind": "en→コード",
+      "q": "guess whether a model id is an embedding or reranker model rather than a chat model",
+      "gold": ["packages/core/src/provider/probe.ts"]
+    },
+    {
+      "id": "en-code-07",
+      "kind": "en→コード",
+      "q": "hash of the command and arguments a tool server is launched with, used to detect changes after consent",
+      "gold": ["packages/core/src/mcp/consent.ts"]
+    },
+    {
+      "id": "en-code-08",
+      "kind": "en→コード",
+      "q": "list files to index with git ls-files and skip secret files and lock files",
+      "gold": ["packages/core/src/memory/files.ts"]
+    },
+
+    {
+      "id": "mix-01",
+      "kind": "混在",
+      "q": "道具の出力が文脈に入りきらないとき、4000字・2000字・1000字と段階的に短くする",
+      "gold": ["packages/core/src/agent/session.ts"]
+    },
+    {
+      "id": "mix-02",
+      "kind": "混在",
+      "q": "承認待ちのまま approvalTimeoutMs を過ぎたら拒否として扱う",
+      "gold": ["apps/server/src/runs.ts"]
+    },
+    {
+      "id": "mix-03",
+      "kind": "混在",
+      "q": "kitty keyboard protocol を有効にして Shift+Enter を区別する",
+      "gold": [
+        "apps/cli/src/tui/index.tsx",
+        "apps/cli/src/tui/editor.ts",
+        "apps/cli/src/tui/App.tsx"
+      ]
+    },
+    {
+      "id": "mix-04",
+      "kind": "混在",
+      "q": "MCP の子プロセスへ渡す環境変数（PATH や HOME だけ）の一覧",
+      "gold": ["packages/core/src/mcp/hub.ts"]
+    }
+  ]
+}
