@@ -1,0 +1,11 @@
+{
+  "name": "akari-embed-node-check",
+  "private": true,
+  "type": "module",
+  "description": "内蔵の埋め込みを Node で動かせるかの確かめ（tools/embed-bench/README.md）",
+  "dependencies": {
+    "@huggingface/tokenizers": "0.2.0",
+    "onnxruntime-node": "1.31.1",
+    "onnxruntime-web": "1.31.1"
+  }
+}

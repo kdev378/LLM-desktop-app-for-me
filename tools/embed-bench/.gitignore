@@ -1,1 +1,5 @@
 results/
+work/
+node/node_modules/
+node/package-lock.json
+__pycache__/
