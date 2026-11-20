@@ -105,10 +105,13 @@ def export_real(model_id: str, out: Path, max_seq: int, sample: list[str]):
     extra = [m for m in modules if m not in ("Transformer", "Pooling", "Normalize")]
     if extra:
         sys.exit(f"Node 側で再現していない部品があります: {extra}（このモデルはこの道具では確かめられない）")
-    pooling = st[1].get_pooling_mode_str()
+    pooling = detect_pooling(st[1])
     if pooling not in ("mean", "cls", "lasttoken"):
         sys.exit(f"まとめ方 {pooling} は Node 側で再現していません")
-    max_len = min(st.max_seq_length or 512, max_seq)
+    # 印をまとめ方から外す設定。印を prompt で渡したときだけ効く。ここでは印を文に含めて渡すので効かない（Node 側と同じ）
+    include_prompt = getattr(st[1], "include_prompt", True)
+    seq = getattr(st, "max_seq_length", None) or getattr(st[0], "max_seq_length", None) or 512
+    max_len = min(seq, max_seq)
 
     tok = AutoTokenizer.from_pretrained(model_id, use_fast=True)
     if not tok.is_fast:
@@ -178,11 +181,23 @@ def export_real(model_id: str, out: Path, max_seq: int, sample: list[str]):
         "max_length": max_len,
         "hidden": int(ref.shape[1]),
         "modules": modules,
+        "include_prompt": include_prompt,
         "pad_token_id": tok.pad_token_id,
         "torch": torch.__version__,
         "onnxruntime_python": ort.__version__,
     }
     return meta, [list(map(float, v)) for v in ref], ids
+
+
+def detect_pooling(module) -> str | None:
+    """まとめ方の名前。sentence-transformers の版で持ち方が違う（5 以前はメソッド、6 以降は pooling_mode）。"""
+    f = getattr(module, "get_pooling_mode_str", None)
+    if callable(f):
+        return f()
+    mode = getattr(module, "pooling_mode", None)
+    if isinstance(mode, (list, tuple)):
+        return mode[0] if len(mode) == 1 else "+".join(mode)
+    return mode
 
 
 def pool(h, mask, mode):
