@@ -244,7 +244,10 @@ def measure_one(model_id: str, corpus_file: str, args) -> dict:
     if args.threads:
         torch.set_num_threads(args.threads)
     t0 = time.perf_counter()
-    model = SentenceTransformer(model_id, device=args.device, trust_remote_code=args.trust_remote_code)
+    # transformers v5 は設定の dtype のまま読み込む。bfloat16 の重み（Granite など）は CPU だと十数倍遅いので float32 に揃える
+    model_kwargs = {"dtype": torch.float32} if args.device == "cpu" else {}
+    model = SentenceTransformer(model_id, device=args.device, trust_remote_code=args.trust_remote_code,
+                                model_kwargs=model_kwargs)
     load_s = time.perf_counter() - t0
     model.max_seq_length = min(model.max_seq_length or 512, args.max_seq)
 
