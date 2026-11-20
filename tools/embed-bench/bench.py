@@ -254,8 +254,9 @@ def measure_one(model_id: str, corpus_file: str, args) -> dict:
     prompts = dict(getattr(model, "prompts", {}) or {})
     qkey, dkey = pick(prompts, QUERY_KEYS), pick(prompts, DOC_KEYS)
     hint = PROMPT_HINTS.get(model_id, {})
-    qprompt = prompts[qkey] if qkey else hint.get("query", "")
-    dprompt = prompts[dkey] if dkey else hint.get("document", "")
+    # sentence-transformers は設定に印が無くても空の印（""）を用意するので、空なら手元の印に戻す
+    qprompt = (prompts[qkey] if qkey else "") or hint.get("query", "")
+    dprompt = (prompts[dkey] if dkey else "") or hint.get("document", "")
 
     texts = [embed_text(c) for c in chunks]
     t1 = time.perf_counter()
