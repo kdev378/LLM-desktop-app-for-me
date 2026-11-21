@@ -146,7 +146,10 @@ type EmbeddingIdentity = {
 - 取得したら指紋を確かめ、合わなければ使わずに消す。置き場は `<root>/models/<モデルID>/`
   （`model.onnx` `tokenizer.json` `tokenizer_config.json` と、Akari が書く `akari-model.json`）。
   版・指紋・見本は `akari-model.json` に持つ。差し替えは別の場所に作ってから入れ替える（途中で止まっても前のモデルが残る）。
-- **今の実装（2026-11-21）**: 自動の取得は、配布の置き場が決まるまで作らない。代わりに
+- **配布の置き場はオーナーの Hugging Face のリポジトリ**（2026-11-21 オーナー決定。置くのはオーナー、未実施）。
+  版はそのリポジトリのコミットで固定する。置くもの: `model.onnx`（fp32）・`tokenizer.json`・`tokenizer_config.json`。
+  指紋と見本は、オーナーの手元で取り込んだ `akari-model.json` から写してマニフェストにする。
+- **今の実装（2026-11-21）**: 自動の取得は、置き場ができるまで作らない。代わりに
   `akari index model import <書き出したフォルダ>`（`tools/embed-bench/export_onnx.py` の出力）で取り込む。
   取り込む前に、そのファイルを実際に動かして、元のモデル（Python）の答えと近さ **0.999 以上**で合うことを確かめる。
   合わなければ取り込まず、前のモデルを残す。合った答えのうち4つを見本として `akari-model.json` に残す。
@@ -369,7 +372,7 @@ akari index model status       # 取り込んだモデル、埋め込みの係�
 
 - 総当たり検索の実測。5,000 / 50,000 チャンクでの時間（P6 で測る）。
 - 実行の部品（node / WebAssembly）の確定。Ruri の fp32 で、オーナーの再測定（`node/check.mjs`）を見て決める。
-- 内蔵のモデルの配布の置き場（自動の取得）。決まるまでは `akari index model import`。
+- 内蔵のモデルの自動の取得。置き場（オーナーの Hugging Face）ができてから。それまでは `akari index model import`。
 - 係のメモリの実測（Ruri を読み込んだ係の常駐の大きさ）。
 - 段階2（ネットワークで共有）。要件だけ上に書いた。
 - 会話履歴の索引化。v1 では対象外。
