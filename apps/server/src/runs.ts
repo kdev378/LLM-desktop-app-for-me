@@ -16,6 +16,8 @@ import {
   loadCredentials,
   prepareMemory,
   MEMORY_SEARCH_TOOL_NAME,
+  WEB_TOOL_NAMES,
+  prepareWeb,
   resolveEndpoint,
   saveConfig,
   toTranscript,
@@ -199,7 +201,10 @@ export class RunManager {
       // MCP の道具（mcp__…）は、実行の始めにつないでから確かめる（ここではまだ分からない）
       const unknown = tools.filter(
         (t) =>
-          !ALL_TOOL_NAMES.includes(t) && t !== MEMORY_SEARCH_TOOL_NAME && !t.startsWith('mcp__'),
+          !ALL_TOOL_NAMES.includes(t) &&
+          t !== MEMORY_SEARCH_TOOL_NAME &&
+          !WEB_TOOL_NAMES.includes(t) &&
+          !t.startsWith('mcp__'),
       );
       if (unknown.length > 0) {
         throw new ApiError(
@@ -381,7 +386,8 @@ export class RunManager {
       record.model = model;
       const requested = record.tools ?? null;
       const toolNames = (requested ?? ALL_TOOL_NAMES).filter(
-        (t) => !t.startsWith('mcp__') && t !== MEMORY_SEARCH_TOOL_NAME,
+        (t) =>
+          !t.startsWith('mcp__') && t !== MEMORY_SEARCH_TOOL_NAME && !WEB_TOOL_NAMES.includes(t),
       );
       const forced = config.agent.toolsMode === 'auto' ? null : config.agent.toolsMode;
       const decision = await decideToolsMode({
@@ -423,9 +429,16 @@ export class RunManager {
             })
           : { tool: null, notices: [] };
       for (const n of memory.notices) this.emit(runId, { type: 'notice', ...n });
+      // Web の道具（15-web.md）。有効にしていなければ渡さない。tools を指定したら、名前を挙げたものだけ
+      const web =
+        requested === null || requested.some((t) => WEB_TOOL_NAMES.includes(t))
+          ? await prepareWeb({ settings: fresh.web, scope: 'all', root: this.opts.root })
+          : { tools: [], notices: [] };
+      for (const n of web.notices) this.emit(runId, { type: 'notice', ...n });
       const mcpTools = [
         ...(requested === null ? mcp.tools : mcp.tools.filter((t) => requested.includes(t.name))),
         ...(memory.tool && (requested === null || requested.length > 0) ? [memory.tool] : []),
+        ...(requested === null ? web.tools : web.tools.filter((t) => requested.includes(t.name))),
       ];
       const missing = (requested ?? []).filter(
         (t) => t.startsWith('mcp__') && !mcpTools.some((m) => m.name === t),

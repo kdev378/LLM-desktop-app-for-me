@@ -4,6 +4,8 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
+import http from 'node:http';
+import type { AddressInfo } from 'node:net';
 import { fileURLToPath } from 'node:url';
 
 /**
@@ -207,12 +209,12 @@ test('到達できない接続先は終了コード4', async () => {
   assert.equal(run.code, 4, 'run も 4');
 });
 
-test('未実装のコマンドは、あるように見せず終了コード2', async () => {
-  for (const name of ['web']) {
-    const r = await akari([name]);
-    assert.equal(r.code, 2, `${name} は未実装として終了コード2`);
-    assert.match(r.stderr, /まだ実装されていません/);
-  }
+test('web は実装済みで、下のコマンドが一覧に出る', async () => {
+  const r = await akari(['web', '--help']);
+  assert.equal(r.code, 0);
+  for (const sub of ['search', 'fetch', 'doctor', 'enable', 'disable'])
+    assert.match(r.stdout, new RegExp(sub));
+  assert.doesNotMatch(r.stdout + r.stderr, /まだ実装されていません/);
 });
 
 test('mcp add は起動する内容を見せて同意を取り、パイプの中では -y が無ければ断る', async () => {
@@ -1029,4 +1031,147 @@ test('圧縮がまだ起きていない会話では、digest はそう言う', a
     assert.equal(d.code, 0, d.stderr);
     assert.match(d.stdout, /まだ圧縮が起きていません/);
   });
+});
+
+// ---------------- Web（15-web.md） ----------------
+
+/** 検索（SearXNG の形）とページを返す、手元の偽のサーバ。 */
+async function webMock(): Promise<{ url: string; close: () => void }> {
+  const s = http.createServer((req, res) => {
+    const u = new URL(req.url ?? '/', 'http://x');
+    if (u.pathname === '/search') {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(
+        JSON.stringify({
+          results: [
+            {
+              title: `「${u.searchParams.get('q')}」の結果`,
+              url: 'https://zod.dev/v4',
+              content: '抜粋',
+            },
+          ],
+        }),
+      );
+      return;
+    }
+    res.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+    res.end(
+      '<title>手元の頁</title><nav>メニュー</nav><main><h1>見出し</h1><p>本文です</p></main>',
+    );
+  });
+  await new Promise<void>((r) => s.listen(0, '127.0.0.1', r));
+  return { url: `http://127.0.0.1:${(s.address() as AddressInfo).port}`, close: () => s.close() };
+}
+
+test('web: 有効にする前に送り先を見せ、非対話なら -y が要る。検索・取得のコマンドと、内部のアドレスの拒否', async () => {
+  const own = await fs.mkdtemp(path.join(os.tmpdir(), 'akari-cli-web-'));
+  const env = { AKARI_HOME: own };
+  const m = await webMock();
+  try {
+    await akari(['config', 'set', 'web.search.url', m.url], undefined, { env });
+    const no = await akari(['web', 'enable'], '', { env });
+    assert.equal(no.code, 3);
+    assert.match(
+      no.stderr,
+      new RegExp(`検索語の送り先: SearXNG（${m.url.replace(/[.]/g, '\\.')}）`),
+    );
+    assert.match(no.stderr, /-y を付けてください/);
+    const yes = await akari(['web', 'enable', '-y'], undefined, { env });
+    assert.equal(yes.code, 0, yes.stderr);
+    assert.match(yes.stdout, /有効にしました/);
+
+    const doc = await akari(['web', 'doctor'], undefined, { env });
+    assert.equal(doc.code, 0, doc.stdout);
+    assert.match(doc.stdout, /✓ 検索: SearXNG/);
+
+    const s = await akari(['web', 'search', 'zod v4'], undefined, { env });
+    assert.equal(s.code, 0, s.stderr);
+    assert.match(s.stdout, /1\. 「zod v4」の結果\n {3}https:\/\/zod\.dev\/v4/);
+
+    for (const url of [
+      `${m.url}/`,
+      m.url.replace('127.0.0.1', 'localhost'),
+      'http://169.254.169.254/',
+    ]) {
+      const f = await akari(['web', 'fetch', url], undefined, { env });
+      assert.equal(f.code, 3, url);
+      assert.match(f.stderr, /private_address/);
+    }
+    await akari(['config', 'set', 'web.fetch.privateHosts', '["127.0.0.1"]'], undefined, { env });
+    const ok = await akari(['web', 'fetch', `${m.url}/`], undefined, { env });
+    assert.equal(ok.code, 0, ok.stderr);
+    assert.match(ok.stdout, /# 見出し\n\n本文です/);
+    assert.ok(!ok.stdout.includes('メニュー'));
+    assert.match(ok.stderr, /題: 手元の頁/);
+  } finally {
+    m.close();
+  }
+});
+
+test('web: 有効なら run でモデルに渡る（見出しに + Web）。無効なら渡らない。非対話で検索の承認が要れば自動で断る', async () => {
+  const own = await fs.mkdtemp(path.join(os.tmpdir(), 'akari-cli-webrun-'));
+  const env = { AKARI_HOME: own };
+  const dir = await sandbox({ 'a.txt': 'a\n' });
+  const m = await webMock();
+  const script = [
+    { name: 'web_search', arguments: { query: 'zod v4' } },
+    { name: 'web_fetch', arguments: { url: `${m.url}/page` } },
+    { text: '調べました。' },
+  ];
+  const port = 11821;
+  const proc = spawn(process.execPath, [MOCK, String(port)], {
+    stdio: 'ignore',
+    env: { ...process.env, AKARI_MOCK_SCRIPT: JSON.stringify(script) },
+  });
+  try {
+    for (const until = Date.now() + 5000; ;) {
+      const ok = await fetch(`http://127.0.0.1:${port}/v1/models`).then(
+        (r) => r.ok,
+        () => false,
+      );
+      if (ok) break;
+      if (Date.now() > until) throw new Error('模擬サーバが起動しませんでした');
+      await new Promise((r) => setTimeout(r, 100));
+    }
+    await akari(
+      [
+        'config',
+        'endpoints',
+        'add',
+        '--name',
+        'w',
+        '--url',
+        `http://127.0.0.1:${port}/v1`,
+        '--model',
+        'mock-coder-14b',
+      ],
+      undefined,
+      { env },
+    );
+    await akari(['config', 'set', 'web.search.url', m.url], undefined, { env });
+    await akari(['config', 'set', 'web.fetch.privateHosts', '["127.0.0.1"]'], undefined, { env });
+
+    const off = await akari(['run', '--permission', 'full', '-C', dir, '調べて'], undefined, {
+      env,
+    });
+    assert.ok(!(off.stdout + off.stderr).includes('+ Web'), '無効なら渡さない');
+    assert.match(off.stdout + off.stderr, /ツール: \d+種/);
+
+    await akari(['web', 'enable', '-y'], undefined, { env });
+    await akari(['config', 'set', 'web.consent', 'once'], undefined, { env });
+    const r = await akari(['run', '--permission', 'full', '-C', dir, '調べて'], undefined, { env });
+    assert.equal(r.code, 0, r.stderr);
+    assert.match(r.stdout + r.stderr, /ツール: 8種 \+ Web/);
+    assert.match(r.stderr + r.stdout, /検索「zod v4」: 1 件/);
+    assert.match(r.stderr + r.stdout, /取得 http:\/\/127\.0\.0\.1:\d+\/page: HTTP 200/);
+
+    await akari(['config', 'set', 'web.consent', 'perRun'], undefined, { env });
+    const asked = await akari(['run', '--permission', 'full', '-C', dir, '調べて'], undefined, {
+      env,
+    });
+    assert.equal(asked.code, 3, asked.stderr);
+  } finally {
+    proc.kill('SIGKILL');
+    m.close();
+  }
 });

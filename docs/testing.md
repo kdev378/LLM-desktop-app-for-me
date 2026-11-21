@@ -1127,6 +1127,54 @@ akari index build
 
 うまくいかなければ、データの置き場の `run/embed.log`（係の記録。本文は入らない）を添えてほしい。
 
+### 11-13. Web 検索とページ取得（P6）
+
+開発の環境からは外のサイトへ直接出られないため、**実際のサイトでの確認はここが初めて**。検索の頼み先はどちらか1つでよい。
+
+**A. Tavily（手軽）**: https://tavily.com で鍵を取る（無料枠、カード不要）。
+
+```sh
+export TAVILY_API_KEY=tvly-...
+akari config set web.search.provider tavily
+akari config set web.search.apiKeyRef env:TAVILY_API_KEY
+```
+
+**B. SearXNG（検索語が外の会社に渡らない）**: Docker で立てる。**この手順は公開の資料から書いたもので、こちらでは動かしていない**。
+`akari web doctor` が ✓ になれば合っている。
+
+```sh
+mkdir -p ~/searxng && cat > ~/searxng/settings.yml <<'YML'
+use_default_settings: true
+server:
+  secret_key: "ここを適当な長い文字に"
+search:
+  formats: [html, json]
+YML
+docker run -d --name searxng -p 8888:8080 -v ~/searxng:/etc/searxng searxng/searxng
+akari config set web.search.url http://localhost:8888
+```
+
+続けて:
+
+```sh
+akari web enable
+akari web doctor
+```
+
+| 操作 | 期待 |
+|---|---|
+| `akari web enable` | 検索語の送り先・承認の出方が出て `有効にしますか？ [y/N]`。y で `有効にしました` |
+| `akari web doctor` | `✓ 検索: … から 1 件の結果が返りました`。SearXNG で ✗ なら、出た案内（`search.formats` に json）を見る |
+| `akari web search "zod v4 breaking changes"` | 題・URL・抜粋が5件 |
+| `akari web fetch https://zod.dev/v4/changelog` | 見出し・リスト・コードが残った本文。メニューやフッターが混ざっていないか。**崩れていたら URL を教えてほしい** |
+| 日本語のページ（Shift_JIS の古いサイトでもよい）を `akari web fetch` | 文字化けしない |
+| `akari web fetch http://localhost:8888/` や `http://192.168.1.1/`（家のルーター） | `取得しませんでした（private_address）`。**取れてしまったら重大なので必ず教えてほしい** |
+| `akari web fetch http://169.254.169.254/` | 同上 |
+| `akari "zod v4 で z.string().email() はどう変わった？ Web で調べて"` | 見出しに `+ Web`。最初の検索で `送る検索語: 「…」` の承認が出る。`a` で、その実行の残りの検索は聞かれない。ページの取得は URL を見せて聞かれる。答えに出典の URL が入るか（モデル次第） |
+| `akari web disable` の後に同じ依頼 | 見出しに `+ Web` が出ない |
+
+会社のネットワークなどプロキシの内側では、`web fetch` が `network_error` になる（プロキシは使わない作り。15-web.md）。
+
 ---
 
 ## 12. 報告してほしいこと

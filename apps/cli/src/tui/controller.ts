@@ -22,6 +22,7 @@ import {
   decideToolsMode,
   mcpToolsFor,
   prepareCliMemory,
+  prepareCliWeb,
   parsePermission,
   toolNamesFor,
   windowTokensFor,
@@ -160,6 +161,8 @@ export class Controller {
   private shownNotices = new Set<string>();
   /** 作業フォルダの索引の道具。送るたびに確かめ直す（14-memory.md「更新」）。 */
   private memoryTool: ToolSpec | null = null;
+  /** Web の道具（15-web.md）。最初の送信で作る（取得したページは画面を閉じるまで覚える）。 */
+  private webTools: ToolSpec[] | null = null;
   private lastSandbox: string | null = null;
 
   private nextId = 1;
@@ -425,6 +428,10 @@ export class Controller {
     return [
       ...mcpToolsFor(setup.mcp.tools, scope),
       ...(this.memoryTool && scope !== 'off' ? [this.memoryTool] : []),
+      // 読み取りのみには web_search だけ（web_fetch は危険度が execute）
+      ...(scope === 'off'
+        ? []
+        : (this.webTools ?? []).filter((t) => scope === 'all' || t.risk === 'read')),
     ];
   }
 
@@ -450,6 +457,20 @@ export class Controller {
       this.pushLines([
         [seg('! ', 'warn'), seg(`索引を使えませんでした: ${(err as Error).message}`, 'warn')],
       ]);
+    }
+    if (this.webTools === null) {
+      const w = await prepareCliWeb(this.ctx, 'all').catch((err: Error) => ({
+        tools: [],
+        notices: [
+          { level: 'warn' as const, message: `Web の道具を使えませんでした: ${err.message}` },
+        ],
+      }));
+      for (const n of w.notices) {
+        if (this.shownNotices.has(n.message)) continue;
+        this.shownNotices.add(n.message);
+        this.pushLines([[seg('! ', 'warn'), seg(n.message, 'warn')]]);
+      }
+      this.webTools = w.tools;
     }
     this.session!.reconfigure({ extraTools: this.extraTools(setup.scope) });
   }
@@ -835,7 +856,8 @@ export class Controller {
     const m = mcpToolsFor(this.setup.mcp.tools, this.setup.scope).length;
     const tail =
       (m > 0 ? ` + MCP ${m}種` : '') +
-      (this.memoryTool && this.setup.scope !== 'off' ? ' + 索引' : '');
+      (this.memoryTool && this.setup.scope !== 'off' ? ' + 索引' : '') +
+      (this.webTools?.length && this.setup.scope !== 'off' ? ' + Web' : '');
     return this.setup.scope === 'off'
       ? 'なし'
       : this.setup.scope === 'read-only'

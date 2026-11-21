@@ -72,6 +72,7 @@ async function setup(
     root?: string;
     files?: Record<string, string>;
     mcpServers?: unknown[];
+    web?: unknown;
   } = {},
 ) {
   const base = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'akari-srv-')));
@@ -109,6 +110,7 @@ async function setup(
         sandbox: { mode: opts.sandboxMode ?? 'auto' },
       },
       mcpServers: opts.mcpServers ?? [],
+      ...(opts.web ? { web: opts.web } : {}),
     });
     await saveConfig(config, root);
   }
@@ -804,5 +806,45 @@ test('tools に memory_search を挙げられる（索引が無ければ渡さ�
     assert.equal(bad.status, 400);
   } finally {
     await s.server.close();
+  }
+});
+
+test('Web の道具: 有効なら渡り、tools を指定したら挙げたものだけ。無効なら挙げても断らずに渡さない', async () => {
+  const on = await setup({ web: { enabled: true } });
+  try {
+    const all = await on.call('POST', '/v1/runs', { prompt: '調べて', workspace: on.repo });
+    assert.equal(all.status, 201, JSON.stringify(all.body));
+    await waitFor(async () => (await statusOf(on, all.body.runId)).status === 'done');
+    const sentAll = on.provider.calls.at(-1)!.tools!.map((t) => t.name);
+    assert.ok(sentAll.includes('web_search') && sentAll.includes('web_fetch'), sentAll.join(','));
+    const some = await on.call('POST', '/v1/runs', {
+      prompt: '調べて',
+      workspace: on.repo,
+      tools: ['read_file', 'web_fetch'],
+    });
+    assert.equal(some.status, 201, JSON.stringify(some.body));
+    await waitFor(async () => (await statusOf(on, some.body.runId)).status === 'done');
+    assert.deepEqual(
+      on.provider.calls.at(-1)!.tools!.map((t) => t.name),
+      ['read_file', 'web_fetch'],
+    );
+  } finally {
+    await on.server.close();
+  }
+  const off = await setup();
+  try {
+    const r = await off.call('POST', '/v1/runs', {
+      prompt: '調べて',
+      workspace: off.repo,
+      tools: ['read_file', 'web_search'],
+    });
+    assert.equal(r.status, 201, JSON.stringify(r.body));
+    await waitFor(async () => (await statusOf(off, r.body.runId)).status === 'done');
+    assert.deepEqual(
+      off.provider.calls.at(-1)!.tools!.map((t) => t.name),
+      ['read_file'],
+    );
+  } finally {
+    await off.server.close();
   }
 });

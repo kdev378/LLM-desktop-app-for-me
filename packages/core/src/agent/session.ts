@@ -963,6 +963,13 @@ export class Session {
     // 秘密のファイルの読み取りは、どの権限でも毎回聞く（「この実行中は許可」も出さない）
     if (name === SECRET_ACCESS_TOOL_NAME) return { required: true, scope: null };
 
+    // 道具が自分で決める（Web の道具）。「この実行中は許可」の単位も道具が持つ
+    if (tool.approval) {
+      const a = tool.approval(args, { mode, refusedInRun: this.refusedInRun });
+      if (a.scope && this.sessionAllows.has(a.scope)) return { required: false, scope: a.scope };
+      return a;
+    }
+
     if (scope && this.sessionAllows.has(scope)) return { required: false, scope };
 
     if (tool.mcp) return this.mcpApproval(tool, scope);

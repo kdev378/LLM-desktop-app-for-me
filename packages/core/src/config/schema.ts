@@ -239,6 +239,42 @@ export const memorySchema = z.object({
   topK: z.number().int().min(1).max(30).default(8),
 });
 
+/** Web 検索とページ取得。docs/spec/15-web.md。既定は無効 */
+export const webSchema = z.object({
+  enabled: z.boolean().default(false),
+  /** perRun … 実行ごとに最初の検索で聞く / once … 有効にしたときの同意で済ませる（検索語は毎回出す） */
+  consent: z.enum(['perRun', 'once']).default('perRun'),
+  search: z
+    .object({
+      provider: z.enum(['searxng', 'tavily']).default('searxng'),
+      /** SearXNG の場所。Tavily では使わない。 */
+      url: urlWithScheme.default('http://localhost:8888'),
+      /** Tavily の鍵の参照。'env:NAME' か credentials.json のキー名。 */
+      apiKeyRef: z.string().nullable().default(null),
+      count: z.number().int().min(1).max(10).default(5),
+    })
+    .default({}),
+  fetch: z
+    .object({
+      maxBytes: z
+        .number()
+        .int()
+        .min(1024)
+        .max(16 * 1024 * 1024)
+        .default(524_288),
+      /** モデルへ1回に渡す文字数。続きは start で頼む。 */
+      maxChars: z.number().int().min(1000).max(200_000).default(10_000),
+      timeoutMs: z.number().int().min(1000).max(300_000).default(20_000),
+      maxRedirects: z.number().int().min(0).max(10).default(3),
+      userAgent: z.string().min(1).default('Akari/0.1 (+local tool)'),
+      /** 内部のアドレスに解決されても取ってよいホスト名（その下の名前も）。 */
+      privateHosts: z.array(z.string().min(1)).default([]),
+      /** 取らないホスト（その下の名前も）。 */
+      deniedHosts: z.array(z.string().min(1)).default([]),
+    })
+    .default({}),
+});
+
 export const configSchema = z.object({
   schemaVersion: z.number().int().default(CONFIG_SCHEMA_VERSION),
   endpoints: z.array(endpointSchema).default([]),
@@ -254,6 +290,7 @@ export const configSchema = z.object({
   server: serverSchema.default({}),
   mcpServers: z.array(mcpServerSchema).default([]),
   memory: memorySchema.default({}),
+  web: webSchema.default({}),
 });
 
 export type Config = z.infer<typeof configSchema>;
@@ -268,6 +305,7 @@ export type SandboxSettings = AgentSettings['sandbox'];
 export type McpServerConfig = z.infer<typeof mcpServerSchema>;
 export type McpAuth = z.infer<typeof mcpAuthSchema>;
 export type MemorySettings = z.infer<typeof memorySchema>;
+export type WebSettings = z.infer<typeof webSchema>;
 export type PermissionMode = AgentSettings['permissionMode'];
 
 export function defaultConfig(): Config {

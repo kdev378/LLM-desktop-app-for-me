@@ -97,8 +97,16 @@
 | `memory.embedding.source` | `builtin`/`endpoint` | `builtin` | 索引 | 内蔵（Akari が CPU で動かす、版を固定したモデル）か外部か（`14-memory.md`） |
 | `memory.embedding.model` | 文字列 または null | `null` | 索引 | 外部のときのモデル名。未指定なら索引を作れない。推測しない |
 | `web.enabled` | 真偽 | `false` | 全体 | Web検索・取得の有効・無効（`15-web.md`） |
-| `web.consent` | `perRun`/`once`/`never` | `perRun` | Web | 外部へ問い合わせる前の確認の頻度 |
-| `web.fetch.allowPrivateHosts` | 真偽 | `false` | Web | 真にするとループバック・内部IPへも取りに行く |
+| `web.consent` | `perRun`/`once` | `perRun` | Web | 検索語を送る前の確認。perRun は実行ごとに最初の1回、once は聞かない |
+| `web.search.provider` | `searxng`/`tavily` | `searxng` | Web | 検索の頼み先 |
+| `web.search.url` | URL | `http://localhost:8888` | Web | SearXNG の場所 |
+| `web.search.apiKeyRef` | 文字列 | `null` | Web | Tavily の鍵の参照（`env:TAVILY_API_KEY` など） |
+| `web.search.count` | 1〜10 | `5` | Web | 検索の既定の件数 |
+| `web.fetch.maxBytes` | 数値 | `524288` | Web | 取りに行く量の上限 |
+| `web.fetch.maxChars` | 数値 | `10000` | Web | モデルへ1回に渡す文字数（続きは start） |
+| `web.fetch.timeoutMs` / `maxRedirects` / `userAgent` | | `20000` / `3` / `Akari/0.1 (+local tool)` | Web | |
+| `web.fetch.privateHosts` | 文字列の配列 | `[]` | Web | 内部のアドレスに解決されても取ってよいホスト名（2026-11-21、`allowPrivateHosts: true` から変更） |
+| `web.fetch.deniedHosts` | 文字列の配列 | `[]` | Web | 取らないホスト（その下の名前も） |
 | `mcpServers[]` | 配列 | `[]` | 全体 | 外部MCPサーバ（`13-mcp.md`） |
 | `mcpServers[].trust` | `ask`/`readOnly`/`full` | `ask` | MCP | 自動実行の範囲。`readOnly` はサーバの自己申告を信じる選択 |
 | `mcpServers[].auth` | `{"type":"none"}` / `{"type":"bearer","token":"env:NAME"}` | `none` | MCP | HTTP の認証。`oauth` は後から足す（`13-mcp.md`） |

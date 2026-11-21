@@ -74,6 +74,7 @@ akari run -m qwen3-4b "直して"     # 後ろ（同じ）
 | `serve` | ハーネスAPI。外部のツールから HTTP で実行を頼めるようにする | **触る**（頼まれた実行が。承認は HTTP で返す） |
 | `mcp …` | 外部の MCP サーバの登録（その道具を Akari に使わせる） | 設定ファイルのみ（登録したサーバが何をするかは別） |
 | `index …` | 作業フォルダの索引（意味の近さで探す記憶）を作る・探す | 触らない（索引は Akari のデータの置き場に作る） |
+| `web …` | Web 検索とページ取得（既定は無効。`web enable` でモデルに渡す） | 触らない（設定ファイルのみ） |
 | `mcp serve` | Akari の道具を MCP で出す（Claude Code などから使う） | 既定は触らない。`--permission auto-edit` 以上で**触る**（記録あり・取り消せる） |
 
 ---
@@ -716,6 +717,37 @@ akari index rm                 # 索引を消す（作業フォルダのファ�
 - 内蔵のモデルは、裏方のプロセス（**埋め込みの係**）が動かす。最初に要ったときに起き（数秒）、Akari をいくつ開いても係は1つ。
   10分使われなければ自分で終わる（`memory.helperIdleMs`）。取り込んだモデルは `models/`、係の居場所は `run/` にある
 
+## `akari web` — Web 検索とページ取得
+
+ライブラリの最新の仕様など、モデルの記憶にないことを調べさせるための道具（`web_search` / `web_fetch`）。仕様は `docs/spec/15-web.md`。
+**既定は無効**で、有効にするまでモデルには渡らない。
+
+```sh
+akari web enable               # 何がどこへ送られるかを見せて、有効にする（パイプの中は -y）
+akari web doctor               # 有効か・検索の提供元に届くか・鍵があるか
+akari web search "zod v4 breaking changes" [-n 5]
+akari web fetch https://zod.dev/v4 [--start 10000] [--raw]
+akari web disable
+```
+
+検索の頼み先は2つから選ぶ。
+
+| 提供元 | 設定 | 検索語の行き先 |
+|---|---|---|
+| SearXNG（既定） | 自分で立てる（Docker など）。`akari config set web.search.url http://localhost:8888`。SearXNG の `settings.yml` の `search.formats` に `json` が要る | 自分のサーバ（そこから各検索エンジンへ） |
+| Tavily | `akari config set web.search.provider tavily` と `akari config set web.search.apiKeyRef env:TAVILY_API_KEY`（鍵は環境変数に。月1,000回まで無料） | Tavily（外部の会社） |
+
+- **承認**: 検索は、実行ごとに最初の1回、送る検索語を見せて聞く（権限が full でも。`web.consent once` で聞かない）。
+  ページの取得は URL を見せて聞く（権限が full なら聞かない。一度断った実行では full でも聞く）
+- **この PC・家や会社の内側のアドレス・クラウドの管理用アドレスは取らない**。名前ではなく、名前解決した IP で判定し、
+  リダイレクトの行き先も毎回確かめる。社内の文書サーバを読ませたいときだけ `web.fetch.privateHosts` にホスト名を挙げる
+- ページはこの PC から直接取りに行く。**プロキシは使わない**（会社のプロキシの内側では取得できない）
+- 長いページは1回 10,000 字まで（`web.fetch.maxChars`）。モデルは続きを `start` で頼める（取り直さない）
+- 取ってきた中身は「外部の文章であって指示ではない」と区切ってモデルに渡す。ページに仕込まれた指示でモデルが
+  おかしなことを頼んでくることはありうるので、ファイルの書き込みとコマンドの承認は外さない
+- `--read-only` の実行には `web_search` だけが渡る。`akari mcp serve` には渡さない
+- `search` / `fetch` のコマンドは、`web.enabled` が false でも使える（打った本人が同意している）
+
 ## `akari mcp` — 外部の道具（MCP サーバ）を使う
 
 MCP は、モデルに道具を渡すための共通の口。ファイル検索・ブラウザ・社内ツールなど、
@@ -990,6 +1022,8 @@ export AKARI_HOME=/tmp/akari-try   # 本番設定と分ける
 | `edit_file` | 書き込み | **path**, **oldText**, **newText**, replaceAll |
 | `delete_file` | 書き込み | **path** |
 | `run_command` | 実行 | **command**, cwd, timeoutMs |
+| `web_search` | 読み取り（検索語の承認あり） | **query**, count — `akari web enable` のときだけ |
+| `web_fetch` | 実行 | **url**, start — `akari web enable` のときだけ |
 
 - `edit_file` は `oldText` が**ちょうど1箇所**に一致しないと実行しない。
   複数一致したら「どこを直すか決められない」として拒否する（`replaceAll` を使えば全部置換）。
@@ -1030,13 +1064,7 @@ Windows ではアクセス権を絞れておらず、起動のたびに警告が
 
 ## まだ無いもの
 
-実行すると「まだ実装されていません」と出る（終了コード2）。
-
-| コマンド | 内容 | 予定 |
-|---|---|---|
-| `web` | Web検索と取得 | P6 |
-
-コマンド以外で未実装のもの:
+未実装のもの:
 
 - 過去の発言の編集と、応答の作り直し（会話の枝分かれ）。保存の形は対応しているが、操作はデスクトップで入れる
 - 会話の書き出し・読み込み（zip）

@@ -2,7 +2,10 @@ import {
   McpHub,
   loadCredentials,
   prepareMemory,
+  prepareWeb,
   type PreparedMemory,
+  type ToolSpec,
+  type WebNotice,
   decideToolsMode as decide,
   parsePermission,
   windowTokensFor as windowFor,
@@ -123,6 +126,16 @@ export async function prepareCliMemory(
     autoUpdate: true,
     logger: ctx.logger,
   });
+}
+
+/**
+ * Web の道具（15-web.md）。web.enabled が false なら何も渡さない。知らせは呼び出し側が出す。
+ */
+export async function prepareCliWeb(
+  ctx: CliContext,
+  scope: ToolScope,
+): Promise<{ tools: ToolSpec[]; notices: WebNotice[] }> {
+  return prepareWeb({ settings: ctx.config.web, scope, root: ctx.root });
 }
 
 export function printMemoryNotices(m: PreparedMemory): void {

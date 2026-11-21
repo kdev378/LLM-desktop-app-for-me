@@ -4,6 +4,7 @@ import {
   Workspace,
   Session,
   MEMORY_SEARCH_TOOL_NAME,
+  WEB_TOOL_NAMES,
   describeSandbox,
   createProvider,
   type ApprovalDecision,
@@ -27,6 +28,7 @@ import {
   mcpToolsFor,
   printMcpNotices,
   prepareCliMemory,
+  prepareCliWeb,
   printMemoryNotices,
   resolvePermission,
   resolveToolsModeOption,
@@ -129,6 +131,9 @@ export async function runCommand(promptArgs: string[], opts: RunOptions): Promis
   // 索引があれば、変わったファイルだけ更新して memory_search を渡す（14-memory.md）
   const memory = await prepareCliMemory(ctx, scope, workspace.root);
   printMemoryNotices(memory);
+  // Web の道具（15-web.md）。有効にしていなければ渡さない
+  const web = await prepareCliWeb(ctx, scope);
+  printMemoryNotices({ tool: null, notices: web.notices, index: null });
   try {
     await runSession();
   } finally {
@@ -158,7 +163,11 @@ export async function runCommand(promptArgs: string[], opts: RunOptions): Promis
         : {}),
       permissionMode,
       toolNames,
-      extraTools: [...mcpToolsFor(mcp.tools, scope), ...(memory.tool ? [memory.tool] : [])],
+      extraTools: [
+        ...mcpToolsFor(mcp.tools, scope),
+        ...(memory.tool ? [memory.tool] : []),
+        ...web.tools,
+      ],
       maxSteps,
       toolsMode: effectiveMode,
       sandbox: ctx.config.agent.sandbox,
@@ -361,8 +370,10 @@ function describeTools(opts: RunOptions, names: string[]): string {
   if (opts.noTools) return 'なし（--no-tools）';
   const mcp = names.filter((n) => n.startsWith('mcp__')).length;
   const memory = names.includes(MEMORY_SEARCH_TOOL_NAME);
-  const own = names.length - mcp - (memory ? 1 : 0);
-  const tail = (mcp > 0 ? ` + MCP ${mcp}種` : '') + (memory ? ' + 索引' : '');
+  const web = names.filter((n) => WEB_TOOL_NAMES.includes(n)).length;
+  const own = names.length - mcp - (memory ? 1 : 0) - web;
+  const tail =
+    (mcp > 0 ? ` + MCP ${mcp}種` : '') + (memory ? ' + 索引' : '') + (web > 0 ? ' + Web' : '');
   if (opts.readOnly) return `読み取りのみ ${own}種${tail}（--read-only）`;
   return `${own}種${tail}`;
 }

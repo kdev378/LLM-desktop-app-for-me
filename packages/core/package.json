@@ -17,8 +17,9 @@
     "test": "tsc -p tsconfig.json && node --test --experimental-strip-types \"test/*.test.ts\""
   },
   "dependencies": {
+    "@akari/embed": "workspace:*",
     "@modelcontextprotocol/client": "2.3.1",
-    "zod": "^3.24.0",
-    "@akari/embed": "workspace:*"
+    "parse5": "8.0.1",
+    "zod": "^3.24.0"
   }
 }

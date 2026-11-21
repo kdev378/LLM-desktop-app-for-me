@@ -4,6 +4,7 @@ import type { TranscriptEntry } from '../agent/transcript.js';
 import type { Logger } from '../diagnostics/logger.js';
 import type { SandboxSettings } from '../config/schema.js';
 import type { SandboxStatus } from './sandbox.js';
+import type { PermissionMode } from '../config/schema.js';
 
 /** 仕様: docs/spec/05-agent.md「ツール一覧」 */
 
@@ -89,6 +90,14 @@ export type ToolSpec = {
   /** 承認を求める前に、何が起きるかを見せるための材料。 */
   preview?: (args: unknown, ctx: ToolContext) => Promise<ToolPreview | undefined>;
   run: (args: unknown, ctx: ToolContext) => Promise<ToolResult>;
+  /**
+   * 承認の決め方を道具が持つとき（Web の道具。docs/spec/15-web.md）。省略すれば危険度と権限モードで決める。
+   * scope は「この実行中は許可」の単位（選択肢にそのまま出る）。null なら毎回聞く。
+   */
+  approval?: (
+    args: unknown,
+    state: { mode: PermissionMode; refusedInRun: boolean },
+  ) => { required: boolean; scope: string | null; reason?: string };
   /**
    * MCP サーバの道具なら、その出どころ（docs/spec/13-mcp.md）。
    * 承認の決め方（trust と権限モードの厳しいほう）と、「取り消せない」表示に使う。

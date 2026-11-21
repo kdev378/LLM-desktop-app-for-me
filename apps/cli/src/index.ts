@@ -61,7 +61,6 @@ program
   echo "要約して" | akari chat         標準入力から
   akari serve                         ハーネスAPI（外部のツールから HTTP で頼む）
 
-まだ実装されていないもの: web（docs/spec/11-roadmap.md の P6）
 `,
   );
 
@@ -379,18 +378,34 @@ model
   .description('取り込んだモデルと、埋め込みの係の様子')
   .action(async () => run(() => memoryCmd().then((m) => m.indexModelStatus(globals()))));
 
-// まだ無い機能。あるように見せない。
-for (const [name, desc, when] of [['web', 'Web検索と取得', 'P6']] as const) {
-  program
-    .command(name, { hidden: true })
-    .description(`${desc}（未実装）`)
-    .allowUnknownOption()
-    .action(() => {
-      errorLine(`${name} はまだ実装されていません。`);
-      hintLine(`${desc} は docs/spec/11-roadmap.md の ${when} で入ります。`);
-      process.exitCode = EXIT.usage;
-    });
-}
+const webCmd = () => import('./commands/web.js');
+const webGroup = program
+  .command('web')
+  .description('Web 検索とページ取得（既定は無効。akari web enable）');
+webGroup
+  .command('search <検索語>')
+  .description('検索する（設定の提供元へ検索語を送る）')
+  .option('-n, --count <件数>', '何件出すか（既定は設定の web.search.count）')
+  .action(async (q, o) => run(() => webCmd().then((m) => m.webSearch(q, { ...globals(), ...o }))));
+webGroup
+  .command('fetch <URL>')
+  .description('ページを取って本文を文字で出す（モデルの web_fetch と同じ検査）')
+  .option('--start <文字>', '何文字目から')
+  .option('--raw', 'HTML を文字に直さずに出す')
+  .action(async (u, o) => run(() => webCmd().then((m) => m.webFetch(u, { ...globals(), ...o }))));
+webGroup
+  .command('doctor')
+  .description('有効か・検索の提供元に届くか・鍵があるか')
+  .action(async () => run(() => webCmd().then((m) => m.webDoctor(globals()))));
+webGroup
+  .command('enable')
+  .description('何がどこへ送られるかを見せて、モデルの道具として有効にする')
+  .option('-y, --yes', '確認を省く')
+  .action(async (o) => run(() => webCmd().then((m) => m.webEnable({ ...globals(), ...o }))));
+webGroup
+  .command('disable')
+  .description('モデルに渡さない')
+  .action(async () => run(() => webCmd().then((m) => m.webDisable(globals()))));
 
 function globals() {
   const o = program.opts();

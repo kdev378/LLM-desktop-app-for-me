@@ -22,6 +22,7 @@ export {
   type McpServerConfig,
   type McpAuth,
   type MemorySettings,
+  type WebSettings,
   mcpServerSchema,
   type PermissionMode,
   type Credentials,
@@ -333,3 +334,33 @@ export {
 export { AkariError, isAkariError, messageOf } from './util/errors.js';
 
 export const CORE_VERSION = '0.1.0';
+
+// Web 検索とページ取得（docs/spec/15-web.md）
+export { checkAddress, type AddressVerdict } from './web/address.js';
+export {
+  fetchPage,
+  hostOf,
+  WebError,
+  type FetchedPage,
+  type FetchSettings,
+  type Resolver,
+  type WebErrorKind,
+} from './web/fetch.js';
+export { htmlToText } from './web/html.js';
+export {
+  createSearchProvider,
+  SearchError,
+  TAVILY_URL,
+  type SearchProvider,
+  type SearchResult,
+} from './web/search.js';
+export {
+  createWebTools,
+  prepareWeb,
+  WEB_FETCH_TOOL_NAME,
+  WEB_SEARCH_SCOPE,
+  WEB_SEARCH_TOOL_NAME,
+  WEB_TOOL_NAMES,
+  type WebNotice,
+  type WebToolsOptions,
+} from './web/tools.js';
