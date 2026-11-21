@@ -2,6 +2,7 @@ import { resolveEndpoint } from '../config/endpoints.js';
 import type { Config } from '../config/schema.js';
 import type { Logger } from '../diagnostics/logger.js';
 import type { ToolSpec } from '../tools/types.js';
+import { BuiltinEmbedder } from './builtin.js';
 import { EndpointEmbedder, describeIdentity, sameIdentity, type Embedder } from './embedder.js';
 import { updateIndex } from './indexer.js';
 import { IndexBusyError, indexDir, loadIndex, type LoadedIndex } from './store.js';
@@ -32,11 +33,13 @@ export async function createEmbedder(
 ): Promise<Embedder> {
   const m = config.memory;
   if (m.embedding.source === 'builtin') {
-    // 内蔵（埋め込みの係）はまだ組み込んでいない。モデルを決めてから足す（14-memory.md「モデルの選び方」）
-    throw new MemoryConfigError(
-      '内蔵の埋め込みモデルはまだ使えません（準備中）。外部の接続先を使うには: ' +
-        'akari config set memory.embedding.source endpoint と akari config set memory.embedding.model <埋め込み用モデル>',
-    );
+    if (!(await BuiltinEmbedder.installed(dataRoot))) {
+      throw new MemoryConfigError(
+        '内蔵の埋め込みモデルが入っていません。akari index model import <書き出したフォルダ> で取り込んでください' +
+          '（外部の接続先を使うなら akari config set memory.embedding.source endpoint）。',
+      );
+    }
+    return new BuiltinEmbedder(dataRoot, { idleMs: m.helperIdleMs });
   }
   if (!m.embedding.model) {
     throw new MemoryConfigError(

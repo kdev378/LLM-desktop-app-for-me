@@ -251,6 +251,32 @@ test('mcp add は起動する内容を見せて同意を取り、パイプの中
   assert.match((await akari(['mcp', 'list'], undefined, { env })).stdout, /登録されていません/);
 });
 
+test('index model: 書き出したモデルを確かめてから取り込み、状態を出す。壊れたフォルダは入れない', async () => {
+  const own = await fs.mkdtemp(path.join(os.tmpdir(), 'akari-cli-model-'));
+  const env = { AKARI_HOME: own, AKARI_TEST_MODELS: '1' };
+  const fixture = path.resolve(
+    path.dirname(fileURLToPath(import.meta.url)),
+    '../../../packages/embed/test/fixtures/tiny',
+  );
+  const before = await akari(['index', 'model', 'status'], undefined, { env });
+  assert.equal(before.code, 0);
+  assert.match(before.stdout, /ruri-v3-70m（cl-nagoya\/ruri-v3-70m）: 未取り込み/);
+  assert.match(before.stdout, /埋め込みの係: 止まっています/);
+
+  const bad = await akari(['index', 'model', 'import', own], undefined, { env });
+  assert.equal(bad.code, 2);
+  assert.match(bad.stderr, /meta.json がありません/);
+
+  const ok = await akari(['index', 'model', 'import', fixture], undefined, { env });
+  assert.equal(ok.code, 0, ok.stderr);
+  assert.match(ok.stdout, /内蔵の埋め込みモデル tiny-test（akari-test\/tiny）を取り込みました/);
+  assert.match(ok.stdout, /近さ 最小 1\.0000/);
+  const meta = JSON.parse(
+    await fs.readFile(path.join(own, 'models', 'tiny-test', 'akari-model.json'), 'utf8'),
+  );
+  assert.match(meta.fileSha256, /^sha256:[0-9a-f]{64}$/);
+});
+
 test('index: 作る・探す・状態・更新・消す。秘密のファイルは入らない', async () => {
   const own = await fs.mkdtemp(path.join(os.tmpdir(), 'akari-cli-idx-'));
   const work = await fs.mkdtemp(path.join(os.tmpdir(), 'akari-cli-idxw-'));
@@ -273,7 +299,7 @@ test('index: 作る・探す・状態・更新・消す。秘密のファイル�
 
   const builtin = await run(['index', 'build']);
   assert.equal(builtin.code, 2);
-  assert.match(builtin.stderr, /内蔵の埋め込みモデルはまだ使えません/);
+  assert.match(builtin.stderr, /内蔵の埋め込みモデルが入っていません。akari index model import/);
   await akari(['config', 'set', 'memory.embedding.source', 'endpoint'], undefined, { env });
   await akari(['config', 'set', 'memory.embedding.model', 'mock-embed'], undefined, { env });
 

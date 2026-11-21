@@ -347,3 +347,117 @@ function formatBytes(n: number): string {
 function fmtTime(iso: string): string {
   return iso.replace('T', ' ').slice(0, 19);
 }
+
+// ---- 内蔵の埋め込みモデル（akari index model） ----
+
+/** 書き出したモデルを取り込む。元のモデルと同じ答えが出ることを確かめてから入れる。 */
+export async function indexModelImport(from: string, opts: GlobalOptions): Promise<void> {
+  const ctx = await createContext(opts);
+  // 推論の部品（onnxruntime）は重いので、このコマンドのときだけ読む
+  const { importModel, ImportError } = await import('@akari/embed/engine');
+  if (!ctx.json && !ctx.quiet) process.stderr.write(c.dim('元のモデルの答えと比べています…\n'));
+  try {
+    const r = await importModel({ dataRoot: ctx.root, from });
+    if (ctx.json) {
+      out(
+        JSON.stringify({
+          model: r.model.id,
+          source: r.model.source,
+          revision: r.model.revision,
+          fileSha256: r.model.fileSha256,
+          runtime: r.runtime,
+          checked: r.checked,
+          cosMin: r.cosMin,
+        }),
+      );
+      return;
+    }
+    out(`内蔵の埋め込みモデル ${r.model.id}（${r.model.source}）を取り込みました。`);
+    out(
+      c.dim(
+        `元のモデルと比べた文 ${r.checked} 件: 近さ 最小 ${r.cosMin.toFixed(5)}・平均 ${r.cosMean.toFixed(5)}（${r.runtime} で計算）`,
+      ),
+    );
+    if (r.fallbackReason) out(c.yellow(r.fallbackReason));
+    out(c.dim('索引を作るには: akari index build'));
+  } catch (err) {
+    if (err instanceof ImportError) throw new ExitError(EXIT.usage, err.message);
+    throw new ExitError(EXIT.runtime, `取り込めませんでした: ${(err as Error).message}`);
+  }
+}
+
+/** 取り込んだ内蔵のモデルと、埋め込みの係の様子。 */
+export async function indexModelStatus(opts: GlobalOptions): Promise<void> {
+  const ctx = await createContext(opts);
+  const { BUILTIN_MODELS, readInstalledModel, readHelperInfo, alive } =
+    await import('@akari/embed');
+  const models = await Promise.all(
+    BUILTIN_MODELS.map(async (e) => ({
+      entry: e,
+      installed: await readInstalledModel(ctx.root, e.id),
+    })),
+  );
+  const info = await readHelperInfo(ctx.root);
+  const helper = info && alive(info.pid) ? info : null;
+  const identity = helper ? await helperIdentity(helper.port, helper.token) : null;
+  const m = ctx.config.memory.embedding;
+  if (ctx.json) {
+    out(
+      JSON.stringify({
+        source: m.source,
+        models: models.map(({ entry, installed }) => ({
+          id: entry.id,
+          source: entry.source,
+          installed: installed
+            ? { revision: installed.revision, fileSha256: installed.fileSha256 }
+            : null,
+        })),
+        helper: helper
+          ? {
+              pid: helper.pid,
+              model: helper.model,
+              runtime: helper.runtime,
+              startedAt: helper.startedAt,
+              ...(identity?.fallbackReason ? { fallbackReason: identity.fallbackReason } : {}),
+            }
+          : null,
+      }),
+    );
+    return;
+  }
+  out(
+    m.source === 'builtin'
+      ? '今の設定: 内蔵の埋め込みを使う'
+      : `今の設定: 外部の接続先の埋め込みを使う（内蔵のモデルは使われません）`,
+  );
+  for (const { entry, installed } of models) {
+    out(
+      installed
+        ? `${entry.id}（${entry.source}）: 取り込み済み ${c.dim(`版 ${installed.revision}`)}`
+        : `${entry.id}（${entry.source}）: 未取り込み ${c.dim('— akari index model import <書き出したフォルダ>')}`,
+    );
+  }
+  if (helper) {
+    out(
+      `埋め込みの係: 動いています（pid ${helper.pid}、${helper.model}、${helper.runtime === 'node' ? 'onnxruntime-node' : 'WebAssembly'}、${fmtTime(helper.startedAt)} から）`,
+    );
+    if (identity?.fallbackReason) out(c.yellow(identity.fallbackReason));
+  } else {
+    out(c.dim('埋め込みの係: 止まっています（要るときに自動で起動し、使われなければ終わります）'));
+  }
+}
+
+async function helperIdentity(
+  port: number,
+  token: string,
+): Promise<{ fallbackReason?: string } | null> {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/akari/embedding-identity`, {
+      headers: { authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(2000),
+    });
+    return res.ok ? ((await res.json()) as { fallbackReason?: string }) : null;
+  } catch {
+    return null;
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "name": "@akari/embed",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "内蔵の埋め込み（埋め込みの係と、モデルを動かす部品）。docs/spec/14-memory.md",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./helper": "./dist/helper-main.js",
+    "./engine": {
+      "types": "./dist/engine.d.ts",
+      "default": "./dist/engine.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsc -p tsconfig.json && node --test --experimental-strip-types \"test/*.test.ts\""
+  },
+  "dependencies": {
+    "@huggingface/tokenizers": "0.2.0",
+    "onnxruntime-node": "1.31.1",
+    "onnxruntime-web": "1.31.1"
+  }
+}

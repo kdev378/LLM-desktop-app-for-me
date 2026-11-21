@@ -165,6 +165,7 @@ export {
   type EmbeddingIdentity,
   type EmbedKind,
 } from './memory/embedder.js';
+export { BuiltinEmbedder, type BuiltinOptions } from './memory/builtin.js';
 export { listIndexTargets, type IndexTarget, type TargetList } from './memory/files.js';
 export { chunkText, embedText, CHUNK_STRATEGY, type Chunk } from './memory/chunk.js';
 export {

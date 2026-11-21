@@ -1,0 +1,14 @@
+{
+  "model": "akari-test/tiny",
+  "pooling": "mean",
+  "max_length": 512,
+  "hidden": 16,
+  "pad_token_id": 0,
+  "prefixes": {
+    "query": "q: ",
+    "document": "d: "
+  },
+  "modules": [
+    "fake"
+  ]
+}

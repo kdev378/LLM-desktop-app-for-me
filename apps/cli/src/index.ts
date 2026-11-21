@@ -61,7 +61,7 @@ program
   echo "要約して" | akari chat         標準入力から
   akari serve                         ハーネスAPI（外部のツールから HTTP で頼む）
 
-まだ実装されていないもの: mcp / index / web（docs/spec/11-roadmap.md の P4〜P6）
+まだ実装されていないもの: web（docs/spec/11-roadmap.md の P6）
 `,
   );
 
@@ -368,6 +368,16 @@ idx
   .description('この作業フォルダの索引を消す（ファイルには触らない）')
   .option('-C, --cwd <dir>', '作業フォルダ（既定はカレント）')
   .action(async (o) => run(() => memoryCmd().then((m) => m.indexRemove({ ...globals(), ...o }))));
+
+const model = idx.command('model').description('内蔵の埋め込みモデル');
+model
+  .command('import <書き出したフォルダ>')
+  .description('書き出したモデルを取り込む（元のモデルと同じ答えが出ることを確かめてから）')
+  .action(async (dir) => run(() => memoryCmd().then((m) => m.indexModelImport(dir, globals()))));
+model
+  .command('status')
+  .description('取り込んだモデルと、埋め込みの係の様子')
+  .action(async () => run(() => memoryCmd().then((m) => m.indexModelStatus(globals()))));
 
 // まだ無い機能。あるように見せない。
 for (const [name, desc, when] of [['web', 'Web検索と取得', 'P6']] as const) {

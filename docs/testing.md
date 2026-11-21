@@ -1101,6 +1101,32 @@ akari index build
 
 終わったら `akari index rm`（索引だけ消える。ファイルには触らない）。
 
+### 11-12. 内蔵の埋め込み（Ruri、P5）
+
+Mac で、ベンチの書き出し（`tools/embed-bench/README.md`）が済んでいて、`tools/embed-bench/work/ruri-v3-70m/` があること。
+無ければ先に `uv run tools/embed-bench/export_onnx.py`（数分。Ruri を取得する）。外部の接続先の設定は要らない。
+
+```sh
+cd <Akari の場所>
+git pull && pnpm install && pnpm build
+akari config set memory.embedding.source builtin      # 11-11 で endpoint にしていたら戻す
+akari index model import tools/embed-bench/work/ruri-v3-70m
+akari index build
+```
+
+| 操作 | 期待 |
+|---|---|
+| `akari index model import …` | `元のモデルの答えと比べています…` の後、`内蔵の埋め込みモデル ruri-v3-70m（cl-nagoya/ruri-v3-70m）を取り込みました。`。次の行の **`近さ 最小 …` の値と、`node で計算` か `wasm で計算` か**を教えてほしい（0.999 未満だと取り込まれない） |
+| `akari index model import /tmp` | `meta.json がありません` で止まる。前に取り込んだモデルはそのまま |
+| `akari index build`（このリポジトリで） | 最初に数秒止まってから（係がモデルを読む）、`埋め込み中 n/N チャンク` が進む。**かかった時間を教えてほしい**（Python では約3分） |
+| `akari index model status` | `ruri-v3-70m（…）: 取り込み済み`、`埋め込みの係: 動いています（pid …、ruri-v3-70m、onnxruntime-node、…）` |
+| 別の端末で `akari index search "埋め込みの係はいつ終わる"` | 1回目から数秒待たずに返る（同じ係を使う）。上位に `docs/spec/14-memory.md` が出るか |
+| `ps -o rss= -p <status に出た pid>` | 係のメモリ（KB）。**値を教えてほしい** |
+| 10分何もしないで `akari index model status` | `埋め込みの係: 止まっています` |
+| `akari "記憶の索引はどこに保存される？"` | 見出しに `+ 索引`。モデルが `memory_search` を使うことがある（モデル次第） |
+
+うまくいかなければ、データの置き場の `run/embed.log`（係の記録。本文は入らない）を添えてほしい。
+
 ---
 
 ## 12. 報告してほしいこと

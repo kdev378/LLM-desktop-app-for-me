@@ -682,12 +682,21 @@ curl -s  -H "$H" "localhost:7801/v1/runs/<runId>/transcript?chunk=2000"   # チ�
 主役は今までどおり `grep` / `glob` で、索引は見つからないときの補助。返るのは候補（ファイル名・行番号・点数）で、
 モデルは `read_file` で中身を確かめてから使う。
 
-今は**外部の接続先の埋め込みモデル**を使う（LM Studio / Ollama などで、埋め込み用のモデルを動かす）。
-Akari が自分で動かす内蔵のモデルは準備中。
+埋め込み（文を数字の並びにして意味の近さを測る仕組み）は2通り。混ぜては使えない。
+
+- **内蔵（既定）**: Akari が自分で `cl-nagoya/ruri-v3-70m` を CPU で動かす。外へは何も送らない。
+  今はモデルを自動では取得しないので、書き出したモデルを一度だけ取り込む（下の `akari index model import`）
+- **外部の接続先**: LM Studio / Ollama などで動かしている埋め込み用のモデルを使う
 
 ```sh
+# 内蔵（既定）
+akari index model import <書き出したフォルダ>   # tools/embed-bench/export_onnx.py の出力。元のモデルと同じ答えが出るか確かめてから入れる
+akari index model status       # 取り込んだモデル、埋め込みの係が動いているか
+
+# 外部の接続先にするなら
 akari config set memory.embedding.source endpoint
 akari config set memory.embedding.model <埋め込み用モデル>   # 分からなければ、未指定のまま build すると候補が出る
+
 akari index build              # 作る（作り直す）。進み具合が出る。Ctrl+C で止めても前の索引は残る
 akari index search "認証はどこ" -k 5 [--path src]
 akari index status             # 件数・モデル・最終更新・索引の後で変わったファイル・今の設定で使えるか
@@ -704,6 +713,8 @@ akari index rm                 # 索引を消す（作業フォルダのファ�
 - 埋め込みのモデルを変えたら、`akari index build` で作り直す。違うモデルの索引は混ぜずに使わない（そう表示される）
 - 埋め込みの接続先がインターネット上にあるときは、作る前に「ファイル何件・何MBが送られるか」を見せて確かめる（パイプの中は `-y`）
 - 索引は Akari のデータの置き場の `index/` にある。消えても作り直せる
+- 内蔵のモデルは、裏方のプロセス（**埋め込みの係**）が動かす。最初に要ったときに起き（数秒）、Akari をいくつ開いても係は1つ。
+  10分使われなければ自分で終わる（`memory.helperIdleMs`）。取り込んだモデルは `models/`、係の居場所は `run/` にある
 
 ## `akari mcp` — 外部の道具（MCP サーバ）を使う
 

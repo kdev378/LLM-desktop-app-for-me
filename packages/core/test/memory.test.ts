@@ -420,7 +420,7 @@ test('下ごしらえ: 変わったファイルが上限を超えたら、自動
   assert.match(r.notices[0]!.message, /3 件あり、自動の更新の上限（2）を超えています/);
 });
 
-test('下ごしらえ: 内蔵はまだ使えない・モデル未指定は、理由を出して道具を渡さない', async () => {
+test('下ごしらえ: 内蔵のモデルを取り込んでいない・モデル未指定は、理由を出して道具を渡さない', async () => {
   const { root, data } = await repo({ 'a.ts': 'a\n' });
   await updateIndex({
     dataRoot: data,
@@ -436,7 +436,10 @@ test('下ごしらえ: 内蔵はまだ使えない・モデル未指定は、理
     autoUpdate: false,
   });
   assert.equal(a.tool, null);
-  assert.match(a.notices[0]!.message, /内蔵の埋め込みモデルはまだ使えません/);
+  assert.match(
+    a.notices[0]!.message,
+    /内蔵の埋め込みモデルが入っていません。akari index model import/,
+  );
   const b = await prepareMemory({
     dataRoot: data,
     indexRoot: root,
